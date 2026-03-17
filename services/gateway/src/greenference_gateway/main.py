@@ -1,6 +1,8 @@
 from fastapi import FastAPI, HTTPException, status
+from fastapi.responses import PlainTextResponse
 
-from greenference_persistence import database_ready, load_runtime_settings
+from greenference_persistence import database_ready, load_runtime_settings, render_prometheus_text
+from greenference_gateway.transport.security import metrics as gateway_metrics
 from greenference_gateway.transport.routes import router
 
 settings = load_runtime_settings("greenference-gateway")
@@ -23,3 +25,11 @@ def readiness() -> dict[str, str]:
             detail={"status": "error", "service": settings.service_name, "database_error": error},
         )
     return {"status": "ok", "service": settings.service_name, "database": "ok"}
+
+
+@app.get("/_metrics")
+def prometheus_metrics() -> PlainTextResponse:
+    return PlainTextResponse(
+        render_prometheus_text(settings.service_name, gateway_metrics),
+        media_type="text/plain; version=0.0.4",
+    )

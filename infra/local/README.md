@@ -81,6 +81,14 @@ By default, recovery mode restarts `control-plane`, `builder`, and `miner-agent`
 GREENFERENCE_STACK_RESTART_SERVICES=control-plane,validator python greenference-api/infra/local/smoke_test.py --check-recovery
 ```
 
+To validate operational surfaces exposed by the stack:
+
+```bash
+python greenference-api/infra/local/smoke_test.py --check-ops
+```
+
+Ops mode verifies Prometheus-style `/_metrics` output from the API-side services and checks `/platform/v1/debug/workers` plus `/platform/v1/debug/event-deliveries` on the control plane.
+
 ## Recovery Expectations
 
 The stack validator is expected to prove these cases cleanly:

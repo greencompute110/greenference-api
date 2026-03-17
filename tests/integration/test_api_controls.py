@@ -237,10 +237,14 @@ def test_control_plane_routes_require_miner_header_and_expose_debug_state(
 
     workflows = control_plane_routes.debug_workflows(authorization=f"Bearer {admin_secret}")
     leases = control_plane_routes.debug_leases(authorization=f"Bearer {admin_secret}")
+    workers = control_plane_routes.debug_workers(authorization=f"Bearer {admin_secret}")
+    deliveries = control_plane_routes.debug_event_deliveries(authorization=f"Bearer {admin_secret}")
     metrics = control_plane_routes.platform_metrics(authorization=f"Bearer {admin_secret}")
 
     assert deployment.deployment_id in {event["payload"]["deployment_id"] for event in workflows if "deployment_id" in event["payload"]}
     assert len(leases) == 1
+    assert any(item["consumer"] == "control-plane-worker" for item in workers)
+    assert any(item["subject"] == "deployment.requested" for item in deliveries)
     assert metrics["gauges"]["deployments.total"] >= 1.0
 
 

@@ -30,6 +30,7 @@ from greenference_protocol import (
 from greenference_gateway.domain.routing import NoReadyDeploymentError
 from greenference_gateway.infrastructure.inference_client import HttpInferenceClient
 from greenference_gateway.infrastructure.repository import GatewayRepository
+from greenference_gateway.transport.security import metrics as gateway_metrics
 
 
 class GatewayService:
@@ -44,6 +45,7 @@ class GatewayService:
         self.control_plane = control_plane or default_control_plane_service
         self.builder = builder or default_builder_service
         self.inference_client = inference_client or HttpInferenceClient()
+        self.metrics = gateway_metrics
 
     def register_user(self, request: UserRegistrationRequest) -> UserRecord:
         user = UserRecord(username=request.username, email=request.email)
@@ -123,6 +125,7 @@ class GatewayService:
             raise
         self.control_plane.clear_deployment_health_failures(deployment.deployment_id)
         self._record_usage(deployment, stream=False, stream_chunk_count=0)
+        self.metrics.observe("invoke.latency_ms", (perf_counter() - started) * 1000.0)
         response.id = request_id
         self._record_invocation(
             deployment,
@@ -172,6 +175,7 @@ class GatewayService:
             raise
         self.control_plane.clear_deployment_health_failures(deployment.deployment_id)
         self._record_usage(deployment, stream=True, stream_chunk_count=chunk_count)
+        self.metrics.observe("invoke.latency_ms", (perf_counter() - started) * 1000.0)
         self._record_invocation(
             deployment,
             request,

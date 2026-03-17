@@ -306,6 +306,28 @@ def _assert_metrics(headers: dict[str, str], deployment_id: str) -> None:
         raise RuntimeError("deployment ready event was not recorded")
 
 
+def _assert_operational_surfaces(headers: dict[str, str]) -> None:
+    for base_url, expected_metric in [
+        (GATEWAY_URL, "greenference_invoke_success"),
+        (CONTROL_PLANE_URL, "greenference_deployment_scheduled"),
+        (BUILDER_URL, "greenference_build_published"),
+        (VALIDATOR_URL, "greenference_weights_published"),
+    ]:
+        body = _request_text("GET", f"{base_url}/_metrics")
+        if expected_metric not in body:
+            raise RuntimeError(f"missing {expected_metric} in metrics output for {base_url}")
+
+    workers = _request_json("GET", f"{CONTROL_PLANE_URL}/platform/v1/debug/workers", headers=headers)
+    if not workers:
+        raise RuntimeError("worker debug endpoint returned no workers")
+    if not all("status_breakdown" in worker for worker in workers):
+        raise RuntimeError("worker debug endpoint missing status breakdown")
+
+    deliveries = _request_json("GET", f"{CONTROL_PLANE_URL}/platform/v1/debug/event-deliveries", headers=headers)
+    if not deliveries:
+        raise RuntimeError("event deliveries debug endpoint returned no deliveries")
+
+
 def verify_recovery(context: dict[str, Any], restart_services: tuple[str, ...] = RESTART_SERVICES) -> None:
     _restart_services(restart_services)
     wait_for_stack_readiness()
@@ -405,10 +427,13 @@ def main(argv: list[str] | None = None) -> int:
     args = argv or sys.argv[1:]
     check_recovery = "--check-recovery" in args
     check_failover = "--check-failover" in args
+    check_ops = "--check-ops" in args
 
     wait_for_stack_readiness()
     context = run_happy_path()
     _assert_metrics(context["headers"], context["deployment"]["deployment_id"])
+    if check_ops:
+        _assert_operational_surfaces(context["headers"])
     if check_failover:
         verify_failover(context)
     if check_recovery:

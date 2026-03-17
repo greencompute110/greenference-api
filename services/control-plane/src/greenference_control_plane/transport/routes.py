@@ -238,6 +238,63 @@ def debug_placements(
     return [record.model_dump(mode="json") for record in service.list_placements(limit=limit)]
 
 
+@router.get("/platform/v1/debug/workers")
+def debug_workers(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_admin_api_key(authorization, x_api_key)
+    consumers = {
+        "builder-worker": "greenference-builder",
+        "control-plane-worker": "greenference-control-plane",
+        "validator-worker": "greenference-validator",
+    }
+    reports: list[dict] = []
+    for consumer, service_name in consumers.items():
+        deliveries = service.bus.list_deliveries(consumer=consumer)
+        breakdown = {
+            "pending": len(service.bus.list_deliveries(consumer=consumer, statuses=["pending"])),
+            "processing": len(service.bus.list_deliveries(consumer=consumer, statuses=["processing"])),
+            "completed": len(service.bus.list_deliveries(consumer=consumer, statuses=["completed"])),
+            "failed": len(service.bus.list_deliveries(consumer=consumer, statuses=["failed"])),
+        }
+        reports.append(
+            {
+                "consumer": consumer,
+                "service": service_name,
+                "bus_transport": service.bus.active_transport,
+                "backlog": breakdown["pending"] + breakdown["processing"],
+                "status_breakdown": breakdown,
+                "max_attempts": max((item.attempts for item in deliveries), default=0),
+                "oldest_available_at": (
+                    min((item.available_at for item in deliveries), default=None)
+                ),
+            }
+        )
+    return reports
+
+
+@router.get("/platform/v1/debug/event-deliveries")
+def debug_event_deliveries(
+    consumer: str | None = None,
+    subject: str | None = None,
+    delivery_status: str | None = None,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_admin_api_key(authorization, x_api_key)
+    subjects = [subject] if subject else None
+    statuses = [delivery_status] if delivery_status else None
+    return [
+        delivery.model_dump(mode="json")
+        for delivery in service.bus.list_deliveries(
+            consumer=consumer,
+            subjects=subjects,
+            statuses=statuses,
+        )
+    ]
+
+
 @router.get("/platform/v1/metrics")
 def platform_metrics(
     authorization: str | None = Header(default=None),

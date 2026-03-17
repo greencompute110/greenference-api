@@ -70,6 +70,10 @@ class SubjectBus:
             session_factory=self.session_factory,
         )
 
+    @property
+    def active_transport(self) -> str:
+        return "durable"
+
     def publish(self, subject: str, payload: dict[str, Any]) -> WorkflowEvent:
         event = self.workflow_repository.publish(subject, payload)
         consumers = SUBJECT_CONSUMERS.get(subject, [])
