@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import importlib.util
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -205,6 +207,7 @@ class NatsJetStreamBus:
         self.nats_url = nats_url
         self.enabled = enabled
         self.client_available = importlib.util.find_spec("nats") is not None
+        self._pending_messages: dict[int, Any] = {}
 
     @property
     def active_transport(self) -> str:
@@ -212,12 +215,22 @@ class NatsJetStreamBus:
 
     def publish(self, subject: str, payload: dict[str, Any]) -> WorkflowEvent:
         event = self.durable_bus.publish(subject, payload)
+        if self.active_transport == "nats":
+            self._publish_to_nats(subject, event)
         return event
 
     def claim_pending(self, consumer: str, subjects: list[str], limit: int = 10) -> list[BusMessage]:
-        return self.durable_bus.claim_pending(consumer, subjects, limit=limit)
+        if self.active_transport != "nats":
+            return self.durable_bus.claim_pending(consumer, subjects, limit=limit)
+        try:
+            return self._claim_pending_from_nats(consumer, subjects, limit=limit)
+        except Exception:
+            return self.durable_bus.claim_pending(consumer, subjects, limit=limit)
 
     def mark_completed(self, delivery_id: int) -> BusMessage | None:
+        message = self._pending_messages.pop(delivery_id, None)
+        if message is not None:
+            self._ack_message(message)
         return self.durable_bus.mark_completed(delivery_id)
 
     def mark_failed(
@@ -227,6 +240,9 @@ class NatsJetStreamBus:
         retryable: bool = False,
         retry_after_seconds: float | None = None,
     ) -> BusMessage | None:
+        message = self._pending_messages.pop(delivery_id, None)
+        if message is not None:
+            self._fail_message(message, retryable=retryable)
         return self.durable_bus.mark_failed(
             delivery_id,
             error,
@@ -241,6 +257,138 @@ class NatsJetStreamBus:
         statuses: list[str] | None = None,
     ) -> list[BusMessage]:
         return self.durable_bus.list_deliveries(consumer=consumer, subjects=subjects, statuses=statuses)
+
+    def _publish_to_nats(self, subject: str, event: WorkflowEvent) -> None:
+        self._run_async(self._publish_to_nats_async(subject, event))
+
+    async def _publish_to_nats_async(self, subject: str, event: WorkflowEvent) -> None:
+        client = await self._connect()
+        try:
+            jetstream = client.jetstream()
+            await self._ensure_stream(jetstream)
+            await jetstream.publish(
+                subject,
+                json.dumps({"event_id": event.event_id, "subject": subject}).encode("utf-8"),
+                headers={"event_id": event.event_id, "subject": subject},
+            )
+        finally:
+            await client.close()
+
+    def _claim_pending_from_nats(self, consumer: str, subjects: list[str], limit: int = 10) -> list[BusMessage]:
+        return self._run_async(self._claim_pending_from_nats_async(consumer, subjects, limit))
+
+    async def _claim_pending_from_nats_async(
+        self,
+        consumer: str,
+        subjects: list[str],
+        limit: int = 10,
+    ) -> list[BusMessage]:
+        client = await self._connect()
+        messages: list[BusMessage] = []
+        try:
+            jetstream = client.jetstream()
+            await self._ensure_stream(jetstream)
+            for subject in subjects:
+                if len(messages) >= limit:
+                    break
+                subscription = await jetstream.pull_subscribe(
+                    subject,
+                    durable=self._durable_name(consumer, subject),
+                    stream=self._stream_name(),
+                )
+                remaining = limit - len(messages)
+                try:
+                    raw_messages = await subscription.fetch(batch=remaining, timeout=0.05)
+                except Exception:
+                    continue
+                for raw_message in raw_messages:
+                    claimed = self._claim_delivery_for_message(consumer, subject, raw_message)
+                    if claimed is None:
+                        self._ack_message(raw_message)
+                        continue
+                    messages.append(claimed)
+                    self._pending_messages[claimed.delivery_id] = raw_message
+                    if len(messages) >= limit:
+                        break
+            return messages
+        finally:
+            await client.close()
+
+    def _claim_delivery_for_message(self, consumer: str, subject: str, raw_message: Any) -> BusMessage | None:
+        event_id = self._message_event_id(raw_message)
+        if not event_id:
+            return None
+        now = utcnow()
+        with session_scope(self.durable_bus.session_factory) as session:
+            row = session.scalar(
+                select(BusDeliveryORM).where(
+                    BusDeliveryORM.event_id == event_id,
+                    BusDeliveryORM.consumer == consumer,
+                    BusDeliveryORM.subject == subject,
+                    BusDeliveryORM.status == "pending",
+                    BusDeliveryORM.available_at <= now,
+                )
+            )
+            if row is None:
+                return None
+            row.status = "processing"
+            row.attempts += 1
+            row.updated_at = now
+            session.add(row)
+            event_row = session.scalar(select(WorkflowEventORM).where(WorkflowEventORM.event_id == row.event_id))
+            if event_row is None:
+                return None
+            return self.durable_bus._to_message(row, event_row)
+
+    @staticmethod
+    def _message_event_id(raw_message: Any) -> str | None:
+        headers = getattr(raw_message, "headers", None) or {}
+        event_id = headers.get("event_id")
+        if event_id:
+            return str(event_id)
+        try:
+            payload = json.loads(getattr(raw_message, "data", b"{}").decode("utf-8"))
+        except Exception:
+            return None
+        resolved = payload.get("event_id")
+        return str(resolved) if resolved is not None else None
+
+    @staticmethod
+    def _stream_name() -> str:
+        return "GREENFERENCE"
+
+    @staticmethod
+    def _durable_name(consumer: str, subject: str) -> str:
+        normalized_subject = subject.replace(".", "-")
+        return f"{consumer}-{normalized_subject}"
+
+    async def _connect(self) -> Any:
+        import nats
+
+        return await nats.connect(servers=[self.nats_url], connect_timeout=1)
+
+    async def _ensure_stream(self, jetstream: Any) -> None:
+        try:
+            await jetstream.add_stream(name=self._stream_name(), subjects=list(SUBJECT_CONSUMERS))
+        except Exception:
+            return
+
+    @staticmethod
+    def _run_async(coro):
+        return asyncio.run(coro)
+
+    def _ack_message(self, raw_message: Any) -> None:
+        if hasattr(raw_message, "ack"):
+            self._run_async(raw_message.ack())
+
+    def _fail_message(self, raw_message: Any, retryable: bool) -> None:
+        if retryable and hasattr(raw_message, "nak"):
+            self._run_async(raw_message.nak())
+            return
+        if hasattr(raw_message, "term"):
+            self._run_async(raw_message.term())
+            return
+        self._ack_message(raw_message)
 
 
 def create_subject_bus(
