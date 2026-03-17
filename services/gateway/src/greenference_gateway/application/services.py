@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Iterator
+from json import dumps
 
 from greenference_builder.application.services import BuilderService, service as default_builder_service
 from greenference_control_plane.application.services import (
@@ -114,6 +116,30 @@ class GatewayService:
         if last_upstream_error is not None:
             raise last_upstream_error
         raise NoReadyDeploymentError(f"no healthy deployment available for model={request.model}")
+
+    def stream_chat_completion(self, request: ChatCompletionRequest) -> Iterator[str]:
+        response = self.invoke_chat_completion(request.model_copy(update={"stream": False}))
+        words = response.content.split()
+        for index, word in enumerate(words):
+            event = {
+                "id": response.id,
+                "object": "chat.completion.chunk",
+                "model": response.model,
+                "deployment_id": response.deployment_id,
+                "routed_hotkey": response.routed_hotkey,
+                "choices": [{"index": 0, "delta": {"content": word if index == 0 else f" {word}"}}],
+            }
+            yield f"data: {dumps(event)}\n\n"
+        done_event = {
+            "id": response.id,
+            "object": "chat.completion.chunk",
+            "model": response.model,
+            "deployment_id": response.deployment_id,
+            "routed_hotkey": response.routed_hotkey,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+        yield f"data: {dumps(done_event)}\n\n"
+        yield "data: [DONE]\n\n"
 
     def _resolve_workload_id(self, model: str) -> str:
         workload = self.control_plane.repository.get_workload(model)

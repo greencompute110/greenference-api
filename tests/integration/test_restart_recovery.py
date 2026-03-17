@@ -41,7 +41,7 @@ class _FakeResponse:
 
 
 def _patch_upstream(monkeypatch: pytest.MonkeyPatch, miner: MinerAgentService) -> None:
-    def fake_urlopen(target):  # type: ignore[no-untyped-def]
+    def fake_urlopen(target, timeout=None):  # type: ignore[no-untyped-def]
         path = urlparse(target.full_url).path
         if path.endswith("/healthz"):
             deployment_id = path.split("/")[2]

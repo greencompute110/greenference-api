@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Header, HTTPException
+from fastapi.responses import StreamingResponse
 
 from greenference_protocol import (
     APIKeyCreateRequest,
@@ -10,7 +11,7 @@ from greenference_protocol import (
 )
 from greenference_gateway.application.services import service
 from greenference_gateway.domain.routing import NoReadyDeploymentError
-from greenference_gateway.infrastructure.inference_client import InferenceUpstreamError
+from greenference_gateway.infrastructure.inference_client import InferenceTimeoutError, InferenceUpstreamError
 from greenference_gateway.transport.security import enforce_rate_limit, metrics, require_api_key
 
 router = APIRouter()
@@ -95,12 +96,22 @@ def chat_completions(
     api_key = require_api_key(authorization, x_api_key)
     enforce_rate_limit("chat_completions", api_key.key_id, limit=60, window_seconds=60)
     try:
+        if payload.stream:
+            metrics.increment("invoke.stream")
+            return StreamingResponse(
+                service.stream_chat_completion(payload),
+                media_type="text/event-stream",
+                headers={"cache-control": "no-cache"},
+            )
         response = service.invoke_chat_completion(payload).model_dump(mode="json")
         metrics.increment("invoke.success")
         return response
     except NoReadyDeploymentError as exc:
         metrics.increment("invoke.failure.no_ready_deployment")
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InferenceTimeoutError as exc:
+        metrics.increment("invoke.failure.timeout")
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     except InferenceUpstreamError as exc:
         metrics.increment("invoke.failure.upstream")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -117,6 +128,7 @@ def completions(
         messages=[{"role": "user", "content": payload.get("prompt", "")}],
         max_tokens=payload.get("max_tokens", 128),
         temperature=payload.get("temperature", 0.7),
+        stream=payload.get("stream", False),
     )
     return chat_completions(request, authorization=authorization, x_api_key=x_api_key)
 
