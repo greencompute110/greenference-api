@@ -108,6 +108,8 @@ class ControlPlaneService:
         deployment.ready_instances = update.ready_instances if update.state == DeploymentState.READY else 0
         deployment.endpoint = update.endpoint or deployment.endpoint
         deployment.last_error = update.error
+        if update.state == DeploymentState.READY:
+            deployment.health_check_failures = 0
         deployment.updated_at = update.observed_at
         self.repository.add_deployment_event(update)
         assignment_status = {
@@ -138,9 +140,48 @@ class ControlPlaneService:
         self.metrics.increment(f"deployment.state.{saved.state.value}")
         return saved
 
+    def list_ready_deployments(self, workload_id: str) -> list[DeploymentRecord]:
+        return sorted(
+            self.repository.list_ready_deployments(workload_id),
+            key=lambda item: item.updated_at,
+            reverse=True,
+        )
+
     def resolve_ready_deployment(self, workload_id: str) -> DeploymentRecord | None:
-        ready = self.repository.list_ready_deployments(workload_id)
-        return sorted(ready, key=lambda item: item.updated_at, reverse=True)[0] if ready else None
+        ready = self.list_ready_deployments(workload_id)
+        return ready[0] if ready else None
+
+    def record_deployment_health_failure(self, deployment_id: str, error: str) -> DeploymentRecord:
+        deployment = self.repository.get_deployment(deployment_id)
+        if deployment is None:
+            raise KeyError(f"deployment not found: {deployment_id}")
+        deployment.health_check_failures += 1
+        deployment.last_error = error
+        deployment.updated_at = datetime.now(UTC)
+        if deployment.health_check_failures >= settings.deployment_health_failure_threshold:
+            self.repository.update_deployment(deployment)
+            return self.update_deployment_status(
+                DeploymentStatusUpdate(
+                    deployment_id=deployment_id,
+                    state=DeploymentState.FAILED,
+                    error=error,
+                    observed_at=deployment.updated_at,
+                )
+            )
+        self.metrics.increment("deployment.health.failed")
+        return self.repository.update_deployment(deployment)
+
+    def clear_deployment_health_failures(self, deployment_id: str) -> DeploymentRecord:
+        deployment = self.repository.get_deployment(deployment_id)
+        if deployment is None:
+            raise KeyError(f"deployment not found: {deployment_id}")
+        if deployment.health_check_failures == 0 and deployment.last_error is None:
+            return deployment
+        deployment.health_check_failures = 0
+        deployment.last_error = None
+        deployment.updated_at = datetime.now(UTC)
+        self.metrics.increment("deployment.health.recovered")
+        return self.repository.update_deployment(deployment)
 
     def record_usage(self, record: UsageRecord) -> UsageRecord:
         self.workflow_repository.publish(
@@ -230,17 +271,38 @@ class ControlPlaneService:
 
         assignment = self._assign_lease(workload, deployment.deployment_id)
         if assignment is None:
+            deployment.retry_count = max(0, event.attempts)
+            deployment.last_error = "no compatible miner capacity available"
+            deployment.updated_at = datetime.now(UTC)
+            self.repository.update_deployment(deployment)
+            if event.attempts >= settings.deployment_request_retry_limit:
+                failed = self.update_deployment_status(
+                    DeploymentStatusUpdate(
+                        deployment_id=deployment.deployment_id,
+                        state=DeploymentState.FAILED,
+                        error=(
+                            "no compatible miner capacity available after "
+                            f"{settings.deployment_request_retry_limit} attempts"
+                        ),
+                        observed_at=deployment.updated_at,
+                    )
+                )
+                self.workflow_repository.mark_failed(event.event_id, failed.last_error or "deployment scheduling failed")
+                return None
             self.workflow_repository.mark_failed(
                 event.event_id,
                 "no compatible miner capacity available",
                 retryable=True,
-                retry_after_seconds=5.0,
+                retry_after_seconds=float(settings.deployment_request_retry_delay_seconds),
             )
             return None
 
         deployment.hotkey = assignment.hotkey
         deployment.node_id = assignment.node_id
         deployment.state = DeploymentState.SCHEDULED
+        deployment.retry_count = max(0, event.attempts - 1)
+        deployment.health_check_failures = 0
+        deployment.last_error = None
         deployment.updated_at = datetime.now(UTC)
         self.repository.save_assignment(assignment)
         saved = self.repository.update_deployment(deployment)

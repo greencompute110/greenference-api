@@ -75,22 +75,45 @@ class GatewayService:
 
     def invoke_chat_completion(self, request: ChatCompletionRequest):
         workload_id = self._resolve_workload_id(request.model)
-        deployment = self.control_plane.resolve_ready_deployment(workload_id)
-        if deployment is None or deployment.endpoint is None:
+        candidates = [
+            deployment
+            for deployment in self.control_plane.list_ready_deployments(workload_id)
+            if deployment.endpoint is not None
+        ]
+        if not candidates:
             raise NoReadyDeploymentError(f"no ready deployment for model={request.model}")
-        response = self.inference_client.invoke_chat_completion(deployment, request)
-        self.control_plane.record_usage(
-            UsageRecord(
-                deployment_id=deployment.deployment_id,
-                workload_id=deployment.workload_id,
-                hotkey=deployment.hotkey or "unknown",
-                request_count=1,
-                compute_seconds=0.25,
-                latency_ms_p95=42.0,
-                occupancy_seconds=0.25,
+
+        last_upstream_error: RuntimeError | None = None
+        for deployment in candidates:
+            if not self.inference_client.check_deployment_health(deployment):
+                self.control_plane.record_deployment_health_failure(
+                    deployment.deployment_id,
+                    f"deployment endpoint unhealthy: {deployment.endpoint}",
+                )
+                continue
+            try:
+                response = self.inference_client.invoke_chat_completion(deployment, request)
+            except RuntimeError as exc:
+                self.control_plane.record_deployment_health_failure(deployment.deployment_id, str(exc))
+                last_upstream_error = exc
+                continue
+            self.control_plane.clear_deployment_health_failures(deployment.deployment_id)
+            self.control_plane.record_usage(
+                UsageRecord(
+                    deployment_id=deployment.deployment_id,
+                    workload_id=deployment.workload_id,
+                    hotkey=deployment.hotkey or "unknown",
+                    request_count=1,
+                    compute_seconds=0.25,
+                    latency_ms_p95=42.0,
+                    occupancy_seconds=0.25,
+                )
             )
-        )
-        return response
+            return response
+
+        if last_upstream_error is not None:
+            raise last_upstream_error
+        raise NoReadyDeploymentError(f"no healthy deployment available for model={request.model}")
 
     def _resolve_workload_id(self, model: str) -> str:
         workload = self.control_plane.repository.get_workload(model)

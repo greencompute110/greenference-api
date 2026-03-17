@@ -134,6 +134,8 @@ class ControlPlaneRepository:
                 ready_instances=deployment.ready_instances,
                 endpoint=deployment.endpoint,
                 last_error=deployment.last_error,
+                retry_count=deployment.retry_count,
+                health_check_failures=deployment.health_check_failures,
                 created_at=deployment.created_at,
                 updated_at=deployment.updated_at,
             )
@@ -157,6 +159,8 @@ class ControlPlaneRepository:
             row.ready_instances = deployment.ready_instances
             row.endpoint = deployment.endpoint
             row.last_error = deployment.last_error
+            row.retry_count = deployment.retry_count
+            row.health_check_failures = deployment.health_check_failures
             row.created_at = deployment.created_at
             row.updated_at = deployment.updated_at
             session.add(row)
@@ -300,6 +304,8 @@ class ControlPlaneRepository:
             ready_instances=row.ready_instances,
             endpoint=row.endpoint,
             last_error=row.last_error,
+            retry_count=row.retry_count,
+            health_check_failures=row.health_check_failures,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )

@@ -12,6 +12,19 @@ class InferenceUpstreamError(RuntimeError):
 
 
 class HttpInferenceClient:
+    def check_deployment_health(self, deployment: DeploymentRecord) -> bool:
+        if not deployment.endpoint:
+            return False
+        upstream = request.Request(
+            url=f"{deployment.endpoint.rstrip('/')}/healthz",
+            method="GET",
+        )
+        try:
+            with request.urlopen(upstream) as response:  # noqa: S310
+                return 200 <= getattr(response, "status", 200) < 300
+        except (HTTPError, URLError):
+            return False
+
     def invoke_chat_completion(
         self,
         deployment: DeploymentRecord,

@@ -3,8 +3,10 @@ from datetime import UTC, datetime, timedelta
 from greenference_builder.application.services import BuilderService
 from greenference_builder.infrastructure.repository import BuilderRepository
 from greenference_control_plane.application.services import ControlPlaneService
+from greenference_control_plane.config import settings
 from greenference_control_plane.infrastructure.repository import ControlPlaneRepository
-from greenference_persistence import WorkflowEventRepository
+from greenference_persistence import WorkflowEventRepository, session_scope
+from greenference_persistence.orm import WorkflowEventORM
 from greenference_protocol import (
     BuildRequest,
     CapacityUpdate,
@@ -164,3 +166,124 @@ def test_duplicate_deployment_request_events_do_not_duplicate_assignments() -> N
     assert len(processed["deployments"]) == 1
     assert len(assignments) == 1
     assert assignments[0].deployment_id == deployment.deployment_id
+
+
+def test_deployment_request_retries_until_capacity_is_available() -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    repository = ControlPlaneRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    control_plane = ControlPlaneService(repository, workflow_repository=workflow_repository)
+
+    repository.upsert_miner(
+        MinerRegistration(
+            hotkey="miner-a",
+            payout_address="5Fminer",
+            api_base_url="http://miner-a.local",
+            validator_url="http://validator.local",
+        )
+    )
+    repository.upsert_heartbeat(Heartbeat(hotkey="miner-a", healthy=True))
+    workload = repository.upsert_workload(
+        WorkloadSpec(
+            **WorkloadCreateRequest(
+                name="retry-model",
+                image="greenference/echo:latest",
+                requirements={"gpu_count": 1},
+            ).model_dump()
+        )
+    )
+    deployment = control_plane.create_deployment(DeploymentCreateRequest(workload_id=workload.workload_id))
+
+    first_pass = control_plane.process_pending_events()
+    saved = repository.get_deployment(deployment.deployment_id)
+    pending = workflow_repository.list_events(subjects=["deployment.requested"], statuses=["pending"])
+
+    assert first_pass["deployments"] == []
+    assert saved is not None
+    assert saved.state.value == "pending"
+    assert saved.retry_count == 1
+    assert len(pending) == 1
+
+    with session_scope(workflow_repository.session_factory) as session:
+        row = session.get(WorkflowEventORM, pending[0].event_id)
+        assert row is not None
+        row.available_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.add(row)
+
+    repository.upsert_capacity(
+        CapacityUpdate(
+            hotkey="miner-a",
+            nodes=[
+                NodeCapability(
+                    hotkey="miner-a",
+                    node_id="node-a",
+                    gpu_model="a100",
+                    gpu_count=1,
+                    available_gpus=1,
+                    vram_gb_per_gpu=80,
+                    cpu_cores=32,
+                    memory_gb=128,
+                )
+            ],
+        )
+    )
+
+    second_pass = control_plane.process_pending_events()
+    saved = repository.get_deployment(deployment.deployment_id)
+    assignments = repository.list_assignments("miner-a")
+
+    assert len(second_pass["deployments"]) == 1
+    assert saved is not None
+    assert saved.state.value == "scheduled"
+    assert saved.retry_count == 1
+    assert len(assignments) == 1
+
+
+def test_deployment_request_fails_after_retry_budget_exhausted() -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    repository = ControlPlaneRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    control_plane = ControlPlaneService(repository, workflow_repository=workflow_repository)
+
+    repository.upsert_miner(
+        MinerRegistration(
+            hotkey="miner-a",
+            payout_address="5Fminer",
+            api_base_url="http://miner-a.local",
+            validator_url="http://validator.local",
+        )
+    )
+    repository.upsert_heartbeat(Heartbeat(hotkey="miner-a", healthy=True))
+    workload = repository.upsert_workload(
+        WorkloadSpec(
+            **WorkloadCreateRequest(
+                name="retry-budget-model",
+                image="greenference/echo:latest",
+                requirements={"gpu_count": 1},
+            ).model_dump()
+        )
+    )
+    deployment = control_plane.create_deployment(DeploymentCreateRequest(workload_id=workload.workload_id))
+
+    for attempt in range(settings.deployment_request_retry_limit):
+        processed = control_plane.process_pending_events()
+        saved = repository.get_deployment(deployment.deployment_id)
+        assert processed["deployments"] == []
+        assert saved is not None
+        if attempt < settings.deployment_request_retry_limit - 1:
+            pending = workflow_repository.list_events(subjects=["deployment.requested"], statuses=["pending"])
+            assert len(pending) == 1
+            with session_scope(workflow_repository.session_factory) as session:
+                row = session.get(WorkflowEventORM, pending[0].event_id)
+                assert row is not None
+                row.available_at = datetime.now(UTC) - timedelta(seconds=1)
+                session.add(row)
+
+    failed = repository.get_deployment(deployment.deployment_id)
+    failed_events = workflow_repository.list_events(subjects=["deployment.requested"], statuses=["failed"])
+
+    assert failed is not None
+    assert failed.state.value == "failed"
+    assert failed.retry_count == settings.deployment_request_retry_limit
+    assert "after" in (failed.last_error or "")
+    assert len(failed_events) == 1

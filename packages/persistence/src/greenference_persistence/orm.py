@@ -90,6 +90,8 @@ class DeploymentORM(Base):
     ready_instances: Mapped[int] = mapped_column(Integer, default=0)
     endpoint: Mapped[str | None] = mapped_column(String(512), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    health_check_failures: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
