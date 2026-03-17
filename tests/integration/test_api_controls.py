@@ -181,6 +181,108 @@ def test_control_plane_routes_require_miner_header_and_expose_debug_state(
     assert metrics["gauges"]["deployments.total"] >= 1.0
 
 
+def test_control_plane_debug_views_expose_unhealthy_miners_and_reassignments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    control_repository = ControlPlaneRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    gateway_repository = GatewayRepository(database_url=shared_db, bootstrap=True)
+    service = ControlPlaneService(control_repository, workflow_repository=workflow_repository)
+    _, admin_secret = _seed_keys(gateway_repository)
+
+    monkeypatch.setattr(control_plane_routes, "service", service)
+    monkeypatch.setattr(control_plane_security, "service", service)
+    monkeypatch.setattr(
+        control_plane_security,
+        "credential_store",
+        CredentialStore(engine=gateway_repository.engine, session_factory=gateway_repository.session_factory),
+    )
+
+    miner_a = MinerRegistration(
+        hotkey="miner-a",
+        payout_address="5FminerA",
+        auth_secret="miner-a-secret",
+        api_base_url="http://miner-a.local",
+        validator_url="http://validator.local",
+    )
+    miner_b = MinerRegistration(
+        hotkey="miner-b",
+        payout_address="5FminerB",
+        auth_secret="miner-b-secret",
+        api_base_url="http://miner-b.local",
+        validator_url="http://validator.local",
+    )
+    service.register_miner(miner_a)
+    service.register_miner(miner_b)
+    service.record_heartbeat(Heartbeat(hotkey="miner-a", healthy=True))
+    service.record_heartbeat(Heartbeat(hotkey="miner-b", healthy=True))
+    service.update_capacity(
+        CapacityUpdate(
+            hotkey="miner-a",
+            nodes=[
+                NodeCapability(
+                    hotkey="miner-a",
+                    node_id="node-a",
+                    gpu_model="a100",
+                    gpu_count=1,
+                    available_gpus=1,
+                    vram_gb_per_gpu=80,
+                    cpu_cores=32,
+                    memory_gb=128,
+                    performance_score=1.5,
+                )
+            ],
+        )
+    )
+    service.update_capacity(
+        CapacityUpdate(
+            hotkey="miner-b",
+            nodes=[
+                NodeCapability(
+                    hotkey="miner-b",
+                    node_id="node-b",
+                    gpu_model="a100",
+                    gpu_count=1,
+                    available_gpus=1,
+                    vram_gb_per_gpu=80,
+                    cpu_cores=32,
+                    memory_gb=128,
+                    performance_score=1.0,
+                )
+            ],
+        )
+    )
+    workload = service.upsert_workload(
+        WorkloadSpec(
+            **WorkloadCreateRequest(
+                name="failover-model",
+                image="greenference/echo:latest",
+                requirements={"gpu_count": 1},
+            ).model_dump()
+        )
+    )
+    deployment = service.create_deployment(DeploymentCreateRequest(workload_id=workload.workload_id))
+    service.process_pending_events()
+    service.record_heartbeat(Heartbeat(hotkey="miner-a", healthy=False))
+    service.process_unhealthy_miners()
+    service.process_pending_events()
+
+    miners = control_plane_routes.debug_miners(authorization=f"Bearer {admin_secret}")
+    reassignments = control_plane_routes.debug_reassignments(authorization=f"Bearer {admin_secret}")
+    stuck = control_plane_routes.debug_stuck_deployments(authorization=f"Bearer {admin_secret}")
+    metrics = control_plane_routes.platform_metrics(authorization=f"Bearer {admin_secret}")
+
+    miner_a_report = next(item for item in miners if item["hotkey"] == "miner-a")
+    assert miner_a_report["status"] == "unhealthy"
+    assert "unhealthy" in miner_a_report["reason"]
+    assert any(item["payload"]["deployment_id"] == deployment.deployment_id for item in reassignments)
+    stuck_deployment = next(item for item in stuck if item["deployment_id"] == deployment.deployment_id)
+    assert stuck_deployment["state"] == "scheduled"
+    assert "stalled" in stuck_deployment["reason"]
+    assert metrics["gauges"]["miners.unhealthy"] >= 1.0
+
+
 def test_validator_routes_require_headers_and_expose_probe_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

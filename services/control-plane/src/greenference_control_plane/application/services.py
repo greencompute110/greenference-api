@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any
 from datetime import UTC, datetime, timedelta
 
 from greenference_persistence import SubjectBus, WorkflowEventRepository, create_subject_bus, get_metrics_store
@@ -203,6 +204,84 @@ class ControlPlaneService:
 
     def usage_summary(self) -> dict[str, dict[str, float]]:
         return self.usage_aggregator.aggregate(self.repository.list_usage_records())
+
+    @staticmethod
+    def _ensure_utc(timestamp: datetime) -> datetime:
+        if timestamp.tzinfo is None:
+            return timestamp.replace(tzinfo=UTC)
+        return timestamp
+
+    def miner_health_report(self, now: datetime | None = None) -> list[dict[str, Any]]:
+        observed_at = now or datetime.now(UTC)
+        reports: list[dict[str, Any]] = []
+        for miner in self.repository.list_miners():
+            heartbeat = self.repository.get_heartbeat(miner.hotkey)
+            capacities = self.repository.get_capacity(miner.hotkey)
+            reason = "healthy"
+            status = "healthy"
+            stale_seconds: int | None = None
+            if heartbeat is None:
+                status = "unhealthy"
+                reason = "missing heartbeat"
+            else:
+                heartbeat_observed_at = self._ensure_utc(heartbeat.observed_at)
+                stale_seconds = int((observed_at - heartbeat_observed_at).total_seconds())
+                if not heartbeat.healthy:
+                    status = "unhealthy"
+                    reason = "miner reported unhealthy"
+                elif stale_seconds > settings.miner_heartbeat_timeout_seconds:
+                    status = "unhealthy"
+                    reason = f"heartbeat stale by {stale_seconds} seconds"
+            reports.append(
+                {
+                    "hotkey": miner.hotkey,
+                    "status": status,
+                    "reason": reason,
+                    "last_heartbeat_at": self._ensure_utc(heartbeat.observed_at) if heartbeat is not None else None,
+                    "stale_seconds": stale_seconds,
+                    "active_leases": heartbeat.active_leases if heartbeat is not None else 0,
+                    "active_deployments": heartbeat.active_deployments if heartbeat is not None else 0,
+                    "node_count": len(capacities.nodes) if capacities is not None else 0,
+                }
+            )
+        return sorted(reports, key=lambda item: (item["status"], item["hotkey"]))
+
+    def reassignment_history(self) -> list[dict[str, Any]]:
+        return [
+            event.model_dump(mode="json")
+            for event in self.workflow_repository.list_events(subjects=["deployment.reassigned"])
+        ]
+
+    def stuck_deployments_report(self, now: datetime | None = None) -> list[dict[str, Any]]:
+        observed_at = now or datetime.now(UTC)
+        reports: list[dict[str, Any]] = []
+        for deployment in self.repository.list_deployments():
+            reason: str | None = None
+            if deployment.state == DeploymentState.PENDING:
+                reason = deployment.last_error or "awaiting scheduler assignment"
+            elif deployment.state in {DeploymentState.SCHEDULED, DeploymentState.PULLING, DeploymentState.STARTING}:
+                reason = deployment.last_error or f"deployment stalled in {deployment.state.value}"
+            elif deployment.state == DeploymentState.READY and deployment.health_check_failures > 0:
+                reason = deployment.last_error or "deployment has health check failures"
+            if reason is None:
+                continue
+            updated_at = self._ensure_utc(deployment.updated_at)
+            age_seconds = int((observed_at - updated_at).total_seconds())
+            reports.append(
+                {
+                    "deployment_id": deployment.deployment_id,
+                    "workload_id": deployment.workload_id,
+                    "state": deployment.state.value,
+                    "hotkey": deployment.hotkey,
+                    "node_id": deployment.node_id,
+                    "reason": reason,
+                    "retry_count": deployment.retry_count,
+                    "health_check_failures": deployment.health_check_failures,
+                    "updated_at": updated_at,
+                    "age_seconds": age_seconds,
+                }
+            )
+        return sorted(reports, key=lambda item: item["age_seconds"], reverse=True)
 
     def process_timeouts(self, now: datetime | None = None) -> list[DeploymentRecord]:
         observed_at = now or datetime.now(UTC)

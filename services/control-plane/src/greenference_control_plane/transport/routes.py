@@ -173,6 +173,33 @@ def debug_deployment_events(
     return service.repository.list_deployment_events(deployment_id=deployment_id)
 
 
+@router.get("/platform/v1/debug/miners")
+def debug_miners(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_admin_api_key(authorization, x_api_key)
+    return service.miner_health_report()
+
+
+@router.get("/platform/v1/debug/reassignments")
+def debug_reassignments(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_admin_api_key(authorization, x_api_key)
+    return service.reassignment_history()
+
+
+@router.get("/platform/v1/debug/stuck-deployments")
+def debug_stuck_deployments(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_admin_api_key(authorization, x_api_key)
+    return service.stuck_deployments_report()
+
+
 @router.get("/platform/v1/metrics")
 def platform_metrics(
     authorization: str | None = Header(default=None),
@@ -186,5 +213,13 @@ def platform_metrics(
     metrics.set_gauge(
         "deployments.total",
         float(len(service.repository.list_deployments())),
+    )
+    metrics.set_gauge(
+        "miners.unhealthy",
+        float(len([miner for miner in service.miner_health_report() if miner["status"] != "healthy"])),
+    )
+    metrics.set_gauge(
+        "deployments.stuck",
+        float(len(service.stuck_deployments_report())),
     )
     return metrics.snapshot()

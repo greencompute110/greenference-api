@@ -51,6 +51,11 @@ class ControlPlaneRepository:
             row = session.get(MinerORM, hotkey)
             return self._to_registration(row) if row else None
 
+    def list_miners(self) -> list[MinerRegistration]:
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(select(MinerORM)).all()
+            return [self._to_registration(row) for row in rows]
+
     def upsert_heartbeat(self, heartbeat: Heartbeat) -> Heartbeat:
         with session_scope(self.session_factory) as session:
             row = session.get(HeartbeatORM, heartbeat.hotkey) or HeartbeatORM(hotkey=heartbeat.hotkey)
