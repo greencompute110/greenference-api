@@ -16,6 +16,7 @@ def test_service_ready_payload_requires_nats_for_api_workers() -> None:
     payload = {
         "status": "ok",
         "bus_transport": "nats",
+        "build_execution_mode": "live",
         "worker_running": True,
         "worker_last_iteration": 1.0,
     }
@@ -29,7 +30,13 @@ def test_service_ready_payload_rejects_missing_worker_state() -> None:
     assert (
         SMOKE_TEST._service_ready_payload(
             SMOKE_TEST.CONTROL_PLANE_URL,
-            {"status": "ok", "bus_transport": "nats", "worker_running": False, "worker_last_iteration": None},
+            {
+                "status": "ok",
+                "bus_transport": "nats",
+                "build_execution_mode": "live",
+                "worker_running": False,
+                "worker_last_iteration": None,
+            },
         )
         is False
     )
@@ -37,6 +44,22 @@ def test_service_ready_payload_rejects_missing_worker_state() -> None:
         SMOKE_TEST._service_ready_payload(
             SMOKE_TEST.MINER_URL,
             {"status": "ok", "worker_running": True, "worker_last_iteration": "now", "bootstrapped": False},
+        )
+        is False
+    )
+
+
+def test_service_ready_payload_rejects_builder_without_live_execution() -> None:
+    assert (
+        SMOKE_TEST._service_ready_payload(
+            SMOKE_TEST.BUILDER_URL,
+            {
+                "status": "ok",
+                "bus_transport": "nats",
+                "build_execution_mode": "simulated",
+                "worker_running": True,
+                "worker_last_iteration": 1.0,
+            },
         )
         is False
     )

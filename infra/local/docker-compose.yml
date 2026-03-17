@@ -164,10 +164,12 @@ services:
       GREENFERENCE_OBJECT_STORE_ENDPOINT: http://minio:9000
       GREENFERENCE_OBJECT_STORE_ACCESS_KEY: greenference
       GREENFERENCE_OBJECT_STORE_SECRET_KEY: greenference
+      GREENFERENCE_OBJECT_STORE_BUCKET: greenference-build-artifacts
       GREENFERENCE_REGISTRY_URL: http://registry:5000
       GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
       GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
       GREENFERENCE_BUS_TRANSPORT: nats
+      GREENFERENCE_BUILD_EXECUTION_MODE: live
       PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/builder/src
     depends_on:
       migrate:

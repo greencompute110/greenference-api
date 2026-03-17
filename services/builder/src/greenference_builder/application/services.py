@@ -15,8 +15,7 @@ from greenference_protocol import BuildContextRecord, BuildEventRecord, BuildRec
 from greenference_builder.infrastructure.execution import (
     ObjectStoreAdapter,
     RegistryAdapter,
-    SimulatedObjectStoreAdapter,
-    SimulatedRegistryAdapter,
+    create_execution_adapters,
 )
 from greenference_builder.infrastructure.repository import BuilderRepository
 
@@ -43,8 +42,9 @@ class BuilderService:
             nats_url=self.settings.nats_url,
             transport=self.settings.bus_transport,
         )
-        self.object_store = object_store or SimulatedObjectStoreAdapter(self.settings)
-        self.registry = registry or SimulatedRegistryAdapter(self.settings)
+        default_object_store, default_registry = create_execution_adapters(self.settings)
+        self.object_store = object_store or default_object_store
+        self.registry = registry or default_registry
         self.metrics = get_metrics_store("greenference-builder")
 
     def start_build(self, request: BuildRequest) -> BuildRecord:

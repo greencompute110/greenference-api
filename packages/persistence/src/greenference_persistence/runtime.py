@@ -23,9 +23,11 @@ class RuntimeSettings(BaseModel):
     redis_url: str = "redis://127.0.0.1:6379/0"
     nats_url: str = "nats://127.0.0.1:4222"
     bus_transport: str = "auto"
+    build_execution_mode: str = "simulated"
     object_store_endpoint: str = "http://127.0.0.1:9000"
     object_store_access_key: str = "greenference"
     object_store_secret_key: str = "greenference"
+    object_store_bucket: str = "greenference-build-artifacts"
     registry_url: str = "http://127.0.0.1:5000"
     enable_background_workers: bool = False
     worker_poll_interval_seconds: float = Field(default=1.0, ge=0.1)
@@ -39,9 +41,11 @@ def load_runtime_settings(service_name: str) -> RuntimeSettings:
         redis_url=os.getenv("GREENFERENCE_REDIS_URL", "redis://127.0.0.1:6379/0"),
         nats_url=os.getenv("GREENFERENCE_NATS_URL", "nats://127.0.0.1:4222"),
         bus_transport=os.getenv("GREENFERENCE_BUS_TRANSPORT", "auto"),
+        build_execution_mode=os.getenv("GREENFERENCE_BUILD_EXECUTION_MODE", "simulated"),
         object_store_endpoint=os.getenv("GREENFERENCE_OBJECT_STORE_ENDPOINT", "http://127.0.0.1:9000"),
         object_store_access_key=os.getenv("GREENFERENCE_OBJECT_STORE_ACCESS_KEY", "greenference"),
         object_store_secret_key=os.getenv("GREENFERENCE_OBJECT_STORE_SECRET_KEY", "greenference"),
+        object_store_bucket=os.getenv("GREENFERENCE_OBJECT_STORE_BUCKET", "greenference-build-artifacts"),
         registry_url=os.getenv("GREENFERENCE_REGISTRY_URL", "http://127.0.0.1:5000"),
         enable_background_workers=_env_bool("GREENFERENCE_ENABLE_BACKGROUND_WORKERS", False),
         worker_poll_interval_seconds=float(os.getenv("GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS", "1.0")),

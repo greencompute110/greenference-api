@@ -51,6 +51,7 @@ def healthcheck() -> dict[str, str | bool]:
         "service": settings.service_name,
         "workers_enabled": settings.enable_background_workers,
         "bus_transport": settings.bus_transport,
+        "build_execution_mode": settings.build_execution_mode,
     }
 
 
@@ -64,6 +65,7 @@ def readiness() -> dict[str, str | bool | float | None]:
         )
     payload: dict[str, str | bool | float | None] = {"status": "ok", "service": settings.service_name, "database": "ok"}
     payload["bus_transport"] = settings.bus_transport
+    payload["build_execution_mode"] = settings.build_execution_mode
     if settings.enable_background_workers:
         payload["workers_enabled"] = True
         payload["worker_running"] = bool(_worker_state["running"])

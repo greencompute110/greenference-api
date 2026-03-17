@@ -106,6 +106,8 @@ def _service_ready_payload(base_url: str, payload: dict[str, Any]) -> bool:
             return False
         if payload.get("worker_last_iteration") in {None, ""}:
             return False
+    if base_url == BUILDER_URL and payload.get("build_execution_mode") != "live":
+        return False
     if base_url == MINER_URL:
         if not payload.get("worker_running"):
             return False

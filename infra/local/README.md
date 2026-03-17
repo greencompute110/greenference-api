@@ -31,7 +31,7 @@ The local stack uses Postgres as the default development path through:
 
 `GREENFERENCE_DATABASE_URL=postgresql+psycopg://greenference:greenference@postgres:5432/greenference`
 
-Runtime dependency URLs are injected for Redis, NATS, MinIO, and the local OCI registry. The `builder`, `control-plane`, and both miner containers run with background workers enabled. The miner containers bootstrap two default nodes and continuously reconcile assigned leases, so both the inference happy path and the reassignment path can complete without manual reconcile calls.
+Runtime dependency URLs are injected for Redis, NATS, MinIO, and the local OCI registry. The `builder` container also runs with `GREENFERENCE_BUILD_EXECUTION_MODE=live`, so build workers stage context metadata and logs into MinIO and push OCI manifests to the local registry instead of using the simulated publish path. The `builder`, `control-plane`, and both miner containers run with background workers enabled. The miner containers bootstrap two default nodes and continuously reconcile assigned leases, so both the inference happy path and the reassignment path can complete without manual reconcile calls.
 
 ## Health Checks
 
@@ -59,7 +59,7 @@ After the stack is healthy, run:
 python greenference-api/infra/local/smoke_test.py
 ```
 
-The smoke test waits for service readiness, verifies that `builder`, `control-plane`, and `validator` are running with `bus_transport=nats`, registers a user and admin API key, publishes a validator capability for the bootstrap miner, then validates:
+The smoke test waits for service readiness, verifies that `builder`, `control-plane`, and `validator` are running with `bus_transport=nats`, and also requires `builder` to report `build_execution_mode=live`. It then registers a user and admin API key, publishes a validator capability for the bootstrap miner, and validates:
 
 - build publish plus `/platform/builds/{id}` and `/platform/images/{image}/history`
 - workload creation with alias and ingress host
