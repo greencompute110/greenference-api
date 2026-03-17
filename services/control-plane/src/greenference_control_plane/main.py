@@ -16,6 +16,7 @@ async def _control_plane_worker_loop() -> None:
     while True:
         service.process_pending_events()
         service.process_timeouts()
+        service.process_unhealthy_miners()
         _worker_state["last_iteration"] = asyncio.get_running_loop().time()
         await asyncio.sleep(settings.worker_poll_interval_seconds)
 

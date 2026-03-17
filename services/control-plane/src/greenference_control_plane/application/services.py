@@ -234,6 +234,33 @@ class ControlPlaneService:
             )
         return expired
 
+    def process_unhealthy_miners(self, now: datetime | None = None) -> list[DeploymentRecord]:
+        observed_at = now or datetime.now(UTC)
+        reassigned: list[DeploymentRecord] = []
+        for assignment in self.repository.list_assignments(statuses=["assigned", "activating", "active"]):
+            heartbeat = self.repository.get_heartbeat(assignment.hotkey)
+            if heartbeat is not None:
+                heartbeat_observed_at = heartbeat.observed_at
+                if heartbeat_observed_at.tzinfo is None:
+                    heartbeat_observed_at = heartbeat_observed_at.replace(tzinfo=UTC)
+            else:
+                heartbeat_observed_at = None
+            if heartbeat is not None and heartbeat.healthy and heartbeat_observed_at is not None:
+                age_seconds = (observed_at - heartbeat_observed_at).total_seconds()
+                if age_seconds <= settings.miner_heartbeat_timeout_seconds:
+                    continue
+                reason = (
+                    f"miner heartbeat stale after {int(age_seconds)} seconds for hotkey={assignment.hotkey}"
+                )
+            elif heartbeat is not None and not heartbeat.healthy:
+                reason = f"miner marked unhealthy for hotkey={assignment.hotkey}"
+            else:
+                reason = f"miner heartbeat missing for hotkey={assignment.hotkey}"
+            deployment = self._requeue_assignment(assignment, reason, observed_at)
+            if deployment is not None:
+                reassigned.append(deployment)
+        return reassigned
+
     def process_pending_events(self, limit: int = 10) -> dict[str, list]:
         events = self.bus.claim_pending("control-plane-worker", ["deployment.requested", "usage.recorded"], limit=limit)
         scheduled: list[DeploymentRecord] = []
@@ -297,7 +324,7 @@ class ControlPlaneService:
 
         assignment = self._assign_lease(workload, deployment.deployment_id)
         if assignment is None:
-            deployment.retry_count = max(0, event.attempts)
+            deployment.retry_count = max(deployment.retry_count, event.attempts)
             deployment.last_error = "no compatible miner capacity available"
             deployment.updated_at = datetime.now(UTC)
             self.repository.update_deployment(deployment)
@@ -326,7 +353,7 @@ class ControlPlaneService:
         deployment.hotkey = assignment.hotkey
         deployment.node_id = assignment.node_id
         deployment.state = DeploymentState.SCHEDULED
-        deployment.retry_count = max(0, event.attempts - 1)
+        deployment.retry_count = max(deployment.retry_count, max(0, event.attempts - 1))
         deployment.health_check_failures = 0
         deployment.last_error = None
         deployment.updated_at = datetime.now(UTC)
@@ -350,6 +377,54 @@ class ControlPlaneService:
         saved = self.repository.add_usage_record(record)
         self.bus.mark_completed(event.delivery_id)
         self.metrics.increment("usage.persisted")
+        return saved
+
+    def _requeue_assignment(
+        self,
+        assignment: LeaseAssignment,
+        reason: str,
+        observed_at: datetime,
+    ) -> DeploymentRecord | None:
+        deployment = self.repository.get_deployment(assignment.deployment_id)
+        if deployment is None or deployment.state in {DeploymentState.FAILED, DeploymentState.TERMINATED}:
+            return None
+        workload = self.repository.get_workload(deployment.workload_id)
+        if workload is None:
+            return None
+        self.repository.adjust_node_capacity(
+            assignment.hotkey,
+            assignment.node_id,
+            workload.requirements.gpu_count,
+        )
+        self.repository.update_assignment_status(assignment.deployment_id, "reassigned")
+        deployment.state = DeploymentState.PENDING
+        deployment.hotkey = None
+        deployment.node_id = None
+        deployment.endpoint = None
+        deployment.ready_instances = 0
+        deployment.health_check_failures = 0
+        deployment.retry_count += 1
+        deployment.last_error = reason
+        deployment.updated_at = observed_at
+        saved = self.repository.update_deployment(deployment)
+        self.bus.publish(
+            "deployment.requested",
+            {
+                "deployment_id": saved.deployment_id,
+                "workload_id": saved.workload_id,
+                "requested_instances": saved.requested_instances,
+            },
+        )
+        self.bus.publish(
+            "deployment.reassigned",
+            {
+                "deployment_id": saved.deployment_id,
+                "previous_hotkey": assignment.hotkey,
+                "previous_node_id": assignment.node_id,
+                "reason": reason,
+            },
+        )
+        self.metrics.increment("deployment.reassigned")
         return saved
 
 

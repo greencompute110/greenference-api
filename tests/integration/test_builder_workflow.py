@@ -172,6 +172,109 @@ def test_duplicate_deployment_request_events_do_not_duplicate_assignments() -> N
     assert assignments[0].deployment_id == deployment.deployment_id
 
 
+def test_unhealthy_miner_requeues_deployment_to_another_miner() -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    repository = ControlPlaneRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    control_plane = ControlPlaneService(repository, workflow_repository=workflow_repository)
+
+    repository.upsert_miner(
+        MinerRegistration(
+            hotkey="miner-a",
+            payout_address="5FminerA",
+            auth_secret="miner-a-secret",
+            api_base_url="http://miner-a.local",
+            validator_url="http://validator.local",
+        )
+    )
+    repository.upsert_miner(
+        MinerRegistration(
+            hotkey="miner-b",
+            payout_address="5FminerB",
+            auth_secret="miner-b-secret",
+            api_base_url="http://miner-b.local",
+            validator_url="http://validator.local",
+        )
+    )
+    repository.upsert_heartbeat(Heartbeat(hotkey="miner-a", healthy=True))
+    repository.upsert_heartbeat(Heartbeat(hotkey="miner-b", healthy=True))
+    repository.upsert_capacity(
+        CapacityUpdate(
+            hotkey="miner-a",
+            nodes=[
+                NodeCapability(
+                    hotkey="miner-a",
+                    node_id="node-a",
+                    gpu_model="a100",
+                    gpu_count=1,
+                    available_gpus=1,
+                    vram_gb_per_gpu=80,
+                    cpu_cores=32,
+                    memory_gb=128,
+                    performance_score=1.5,
+                )
+            ],
+        )
+    )
+    repository.upsert_capacity(
+        CapacityUpdate(
+            hotkey="miner-b",
+            nodes=[
+                NodeCapability(
+                    hotkey="miner-b",
+                    node_id="node-b",
+                    gpu_model="a100",
+                    gpu_count=1,
+                    available_gpus=1,
+                    vram_gb_per_gpu=80,
+                    cpu_cores=32,
+                    memory_gb=128,
+                    performance_score=1.0,
+                )
+            ],
+        )
+    )
+    workload = repository.upsert_workload(
+        WorkloadSpec(
+            **WorkloadCreateRequest(
+                name="failover-model",
+                image="greenference/echo:latest",
+                requirements={"gpu_count": 1},
+            ).model_dump()
+        )
+    )
+    deployment = control_plane.create_deployment(DeploymentCreateRequest(workload_id=workload.workload_id))
+
+    first_pass = control_plane.process_pending_events()
+    scheduled = repository.get_deployment(deployment.deployment_id)
+    assert len(first_pass["deployments"]) == 1
+    assert scheduled is not None
+    assert scheduled.hotkey == "miner-a"
+
+    repository.upsert_heartbeat(Heartbeat(hotkey="miner-a", healthy=False))
+    requeued = control_plane.process_unhealthy_miners()
+    assert len(requeued) == 1
+
+    pending = repository.get_deployment(deployment.deployment_id)
+    assert pending is not None
+    assert pending.state.value == "pending"
+    assert pending.hotkey is None
+    assert "unhealthy" in (pending.last_error or "")
+
+    second_pass = control_plane.process_pending_events()
+    failed_over = repository.get_deployment(deployment.deployment_id)
+    assignments = repository.list_assignments(statuses=["assigned"])
+    reassigned_events = workflow_repository.list_events(subjects=["deployment.reassigned"], statuses=["pending"])
+
+    assert len(second_pass["deployments"]) == 1
+    assert failed_over is not None
+    assert failed_over.hotkey == "miner-b"
+    assert failed_over.state.value == "scheduled"
+    assert len(assignments) == 1
+    assert assignments[0].hotkey == "miner-b"
+    assert len(reassigned_events) == 1
+
+
 def test_deployment_request_retries_until_capacity_is_available() -> None:
     shared_db = "sqlite+pysqlite:///:memory:"
     repository = ControlPlaneRepository(database_url=shared_db, bootstrap=True)
