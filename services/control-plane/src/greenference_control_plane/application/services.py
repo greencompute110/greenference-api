@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from greenference_persistence import WorkflowEventRepository, get_metrics_store
+from greenference_persistence import SubjectBus, WorkflowEventRepository, create_subject_bus, get_metrics_store
+from greenference_persistence.runtime import load_runtime_settings
 from greenference_protocol import (
     CapacityUpdate,
     DeploymentCreateRequest,
@@ -27,11 +28,20 @@ class ControlPlaneService:
         self,
         repository: ControlPlaneRepository | None = None,
         workflow_repository: WorkflowEventRepository | None = None,
+        bus: SubjectBus | None = None,
     ) -> None:
         self.repository = repository or ControlPlaneRepository()
         self.workflow_repository = workflow_repository or WorkflowEventRepository(
             engine=self.repository.engine,
             session_factory=self.repository.session_factory,
+        )
+        runtime_settings = load_runtime_settings("greenference-control-plane")
+        self.bus = bus or create_subject_bus(
+            engine=self.workflow_repository.engine,
+            session_factory=self.workflow_repository.session_factory,
+            workflow_repository=self.workflow_repository,
+            nats_url=runtime_settings.nats_url,
+            transport=runtime_settings.bus_transport,
         )
         self.placement_policy = PlacementPolicy()
         self.usage_aggregator = UsageAggregator()
@@ -65,7 +75,7 @@ class ControlPlaneService:
             requested_instances=payload.requested_instances,
         )
         self.repository.create_deployment(deployment)
-        self.workflow_repository.publish(
+        self.bus.publish(
             "deployment.requested",
             {
                 "deployment_id": deployment.deployment_id,
@@ -127,7 +137,7 @@ class ControlPlaneService:
             DeploymentState.FAILED: "deployment.failed",
             DeploymentState.TERMINATED: "deployment.terminated",
         }.get(update.state, "deployment.status.updated")
-        self.workflow_repository.publish(
+        self.bus.publish(
             subject,
             {
                 "deployment_id": saved.deployment_id,
@@ -184,7 +194,7 @@ class ControlPlaneService:
         return self.repository.update_deployment(deployment)
 
     def record_usage(self, record: UsageRecord) -> UsageRecord:
-        self.workflow_repository.publish(
+        self.bus.publish(
             "usage.recorded",
             record.model_dump(mode="json"),
         )
@@ -225,7 +235,7 @@ class ControlPlaneService:
         return expired
 
     def process_pending_events(self, limit: int = 10) -> dict[str, list]:
-        events = self.workflow_repository.claim_pending(["deployment.requested", "usage.recorded"], limit=limit)
+        events = self.bus.claim_pending("control-plane-worker", ["deployment.requested", "usage.recorded"], limit=limit)
         scheduled: list[DeploymentRecord] = []
         usage_records: list[UsageRecord] = []
 
@@ -240,15 +250,31 @@ class ControlPlaneService:
                 if usage_record is not None:
                     usage_records.append(usage_record)
                 continue
-            self.workflow_repository.mark_failed(event.event_id, f"unsupported workflow subject={event.subject}")
+            self.bus.mark_failed(event.delivery_id, f"unsupported workflow subject={event.subject}")
 
         self.metrics.set_gauge(
             "workflow.pending.deployment.requested",
-            float(len(self.workflow_repository.list_events(subjects=["deployment.requested"], statuses=["pending"]))),
+            float(
+                len(
+                    self.bus.list_deliveries(
+                        consumer="control-plane-worker",
+                        subjects=["deployment.requested"],
+                        statuses=["pending"],
+                    )
+                )
+            ),
         )
         self.metrics.set_gauge(
             "workflow.pending.usage.recorded",
-            float(len(self.workflow_repository.list_events(subjects=["usage.recorded"], statuses=["pending"]))),
+            float(
+                len(
+                    self.bus.list_deliveries(
+                        consumer="control-plane-worker",
+                        subjects=["usage.recorded"],
+                        statuses=["pending"],
+                    )
+                )
+            ),
         )
         return {
             "deployments": [item.model_dump(mode="json") for item in scheduled],
@@ -258,15 +284,15 @@ class ControlPlaneService:
     def _process_deployment_request(self, event) -> DeploymentRecord | None:
         deployment = self.repository.get_deployment(str(event.payload["deployment_id"]))
         if deployment is None:
-            self.workflow_repository.mark_failed(event.event_id, "deployment not found")
+            self.bus.mark_failed(event.delivery_id, "deployment not found")
             return None
         if deployment.state != DeploymentState.PENDING:
-            self.workflow_repository.mark_completed(event.event_id)
+            self.bus.mark_completed(event.delivery_id)
             return None
 
         workload = self.repository.get_workload(deployment.workload_id)
         if workload is None:
-            self.workflow_repository.mark_failed(event.event_id, "workload not found")
+            self.bus.mark_failed(event.delivery_id, "workload not found")
             return None
 
         assignment = self._assign_lease(workload, deployment.deployment_id)
@@ -287,10 +313,10 @@ class ControlPlaneService:
                         observed_at=deployment.updated_at,
                     )
                 )
-                self.workflow_repository.mark_failed(event.event_id, failed.last_error or "deployment scheduling failed")
+                self.bus.mark_failed(event.delivery_id, failed.last_error or "deployment scheduling failed")
                 return None
-            self.workflow_repository.mark_failed(
-                event.event_id,
+            self.bus.mark_failed(
+                event.delivery_id,
                 "no compatible miner capacity available",
                 retryable=True,
                 retry_after_seconds=float(settings.deployment_request_retry_delay_seconds),
@@ -306,7 +332,7 @@ class ControlPlaneService:
         deployment.updated_at = datetime.now(UTC)
         self.repository.save_assignment(assignment)
         saved = self.repository.update_deployment(deployment)
-        self.workflow_repository.publish(
+        self.bus.publish(
             "deployment.scheduled",
             {
                 "deployment_id": saved.deployment_id,
@@ -315,14 +341,14 @@ class ControlPlaneService:
                 "node_id": saved.node_id,
             },
         )
-        self.workflow_repository.mark_completed(event.event_id)
+        self.bus.mark_completed(event.delivery_id)
         self.metrics.increment("deployment.scheduled")
         return saved
 
     def _process_usage_record(self, event) -> UsageRecord | None:
         record = UsageRecord(**event.payload)
         saved = self.repository.add_usage_record(record)
-        self.workflow_repository.mark_completed(event.event_id)
+        self.bus.mark_completed(event.delivery_id)
         self.metrics.increment("usage.persisted")
         return saved
 

@@ -1,3 +1,4 @@
+from greenference_persistence.bus import BusMessage, NatsJetStreamBus, SubjectBus, create_subject_bus
 from greenference_persistence.credentials import CredentialStore
 from greenference_persistence.db import create_db_engine, create_session_factory, init_database, session_scope
 from greenference_persistence.metrics import MetricsStore, get_metrics_store
@@ -8,11 +9,15 @@ from greenference_persistence.workflow import WorkflowEvent, WorkflowEventReposi
 
 __all__ = [
     "Base",
+    "BusMessage",
     "CredentialStore",
     "FixedWindowRateLimiter",
     "MetricsStore",
     "RateLimitResult",
     "RuntimeSettings",
+    "NatsJetStreamBus",
+    "SubjectBus",
+    "create_subject_bus",
     "WorkflowEvent",
     "WorkflowEventRepository",
     "create_db_engine",

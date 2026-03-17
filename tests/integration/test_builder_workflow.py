@@ -1,12 +1,14 @@
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import select
+
 from greenference_builder.application.services import BuilderService
 from greenference_builder.infrastructure.repository import BuilderRepository
 from greenference_control_plane.application.services import ControlPlaneService
 from greenference_control_plane.config import settings
 from greenference_control_plane.infrastructure.repository import ControlPlaneRepository
-from greenference_persistence import WorkflowEventRepository, session_scope
-from greenference_persistence.orm import WorkflowEventORM
+from greenference_persistence import SubjectBus, WorkflowEventRepository, session_scope
+from greenference_persistence.orm import BusDeliveryORM, WorkflowEventORM
 from greenference_protocol import (
     BuildRequest,
     CapacityUpdate,
@@ -205,10 +207,14 @@ def test_deployment_request_retries_until_capacity_is_available() -> None:
     assert len(pending) == 1
 
     with session_scope(workflow_repository.session_factory) as session:
-        row = session.get(WorkflowEventORM, pending[0].event_id)
-        assert row is not None
-        row.available_at = datetime.now(UTC) - timedelta(seconds=1)
-        session.add(row)
+        event_row = session.get(WorkflowEventORM, pending[0].event_id)
+        assert event_row is not None
+        event_row.available_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.add(event_row)
+        delivery_row = session.scalar(select(BusDeliveryORM).where(BusDeliveryORM.event_id == pending[0].event_id))
+        assert delivery_row is not None
+        delivery_row.available_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.add(delivery_row)
 
     repository.upsert_capacity(
         CapacityUpdate(
@@ -271,13 +277,19 @@ def test_deployment_request_fails_after_retry_budget_exhausted() -> None:
         assert processed["deployments"] == []
         assert saved is not None
         if attempt < settings.deployment_request_retry_limit - 1:
-            pending = workflow_repository.list_events(subjects=["deployment.requested"], statuses=["pending"])
-            assert len(pending) == 1
-            with session_scope(workflow_repository.session_factory) as session:
-                row = session.get(WorkflowEventORM, pending[0].event_id)
-                assert row is not None
-                row.available_at = datetime.now(UTC) - timedelta(seconds=1)
-                session.add(row)
+                pending = workflow_repository.list_events(subjects=["deployment.requested"], statuses=["pending"])
+                assert len(pending) == 1
+                with session_scope(workflow_repository.session_factory) as session:
+                    event_row = session.get(WorkflowEventORM, pending[0].event_id)
+                    assert event_row is not None
+                    event_row.available_at = datetime.now(UTC) - timedelta(seconds=1)
+                    session.add(event_row)
+                    delivery_row = session.scalar(
+                        select(BusDeliveryORM).where(BusDeliveryORM.event_id == pending[0].event_id)
+                    )
+                    assert delivery_row is not None
+                    delivery_row.available_at = datetime.now(UTC) - timedelta(seconds=1)
+                    session.add(delivery_row)
 
     failed = repository.get_deployment(deployment.deployment_id)
     failed_events = workflow_repository.list_events(subjects=["deployment.requested"], statuses=["failed"])
@@ -287,3 +299,33 @@ def test_deployment_request_fails_after_retry_budget_exhausted() -> None:
     assert failed.retry_count == settings.deployment_request_retry_limit
     assert "after" in (failed.last_error or "")
     assert len(failed_events) == 1
+
+
+def test_builder_uses_durable_bus_deliveries() -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    bus = SubjectBus(database_url=shared_db, bootstrap=True, workflow_repository=workflow_repository)
+    builder = BuilderService(
+        BuilderRepository(database_url=shared_db, bootstrap=True),
+        workflow_repository=workflow_repository,
+        bus=bus,
+    )
+
+    build = builder.start_build(
+        BuildRequest(
+            image="greenference/echo:bus",
+            context_uri="s3://greenference/builds/bus.zip",
+        )
+    )
+    deliveries = bus.list_deliveries(consumer="builder-worker", subjects=["build.accepted"])
+    assert len(deliveries) == 1
+    assert deliveries[0].payload["build_id"] == build.build_id
+
+    processed = builder.process_pending_events()
+    completed = bus.list_deliveries(
+        consumer="builder-worker",
+        subjects=["build.accepted"],
+        statuses=["completed"],
+    )
+    assert len(processed) == 1
+    assert len(completed) == 1

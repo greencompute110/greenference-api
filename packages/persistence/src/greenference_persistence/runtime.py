@@ -22,6 +22,7 @@ class RuntimeSettings(BaseModel):
     database_url: str
     redis_url: str = "redis://127.0.0.1:6379/0"
     nats_url: str = "nats://127.0.0.1:4222"
+    bus_transport: str = "auto"
     object_store_endpoint: str = "http://127.0.0.1:9000"
     object_store_access_key: str = "greenference"
     object_store_secret_key: str = "greenference"
@@ -37,6 +38,7 @@ def load_runtime_settings(service_name: str) -> RuntimeSettings:
         database_url=get_database_url(),
         redis_url=os.getenv("GREENFERENCE_REDIS_URL", "redis://127.0.0.1:6379/0"),
         nats_url=os.getenv("GREENFERENCE_NATS_URL", "nats://127.0.0.1:4222"),
+        bus_transport=os.getenv("GREENFERENCE_BUS_TRANSPORT", "auto"),
         object_store_endpoint=os.getenv("GREENFERENCE_OBJECT_STORE_ENDPOINT", "http://127.0.0.1:9000"),
         object_store_access_key=os.getenv("GREENFERENCE_OBJECT_STORE_ACCESS_KEY", "greenference"),
         object_store_secret_key=os.getenv("GREENFERENCE_OBJECT_STORE_SECRET_KEY", "greenference"),

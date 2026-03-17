@@ -54,7 +54,7 @@ services:
       postgres:
         condition: service_healthy
     command: >
-      sh -lc "pip install alembic psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      sh -lc "pip install alembic nats-py psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
       alembic upgrade head"
   gateway:
     image: python:3.12-slim
@@ -70,6 +70,7 @@ services:
       GREENFERENCE_OBJECT_STORE_ACCESS_KEY: greenference
       GREENFERENCE_OBJECT_STORE_SECRET_KEY: greenference
       GREENFERENCE_REGISTRY_URL: http://registry:5000
+      GREENFERENCE_BUS_TRANSPORT: nats
       PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/gateway/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-api/services/validator/src:/workspace/greenference-api/services/builder/src:/workspace/greenference-miner/services/miner-agent/src
     depends_on:
       migrate:
@@ -79,7 +80,7 @@ services:
       builder:
         condition: service_started
     command: >
-      sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      sh -lc "pip install nats-py psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
       uvicorn greenference_gateway.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
@@ -104,12 +105,13 @@ services:
       GREENFERENCE_REGISTRY_URL: http://registry:5000
       GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
       GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
+      GREENFERENCE_BUS_TRANSPORT: nats
       PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/control-plane/src
     depends_on:
       migrate:
         condition: service_completed_successfully
     command: >
-      sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      sh -lc "pip install nats-py psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
       uvicorn greenference_control_plane.main:app --host 0.0.0.0 --port 8001"
     ports:
       - "8001:8001"
@@ -132,12 +134,15 @@ services:
       GREENFERENCE_OBJECT_STORE_ACCESS_KEY: greenference
       GREENFERENCE_OBJECT_STORE_SECRET_KEY: greenference
       GREENFERENCE_REGISTRY_URL: http://registry:5000
+      GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
+      GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
+      GREENFERENCE_BUS_TRANSPORT: nats
       PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/validator/src
     depends_on:
       migrate:
         condition: service_completed_successfully
     command: >
-      sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      sh -lc "pip install nats-py psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
       uvicorn greenference_validator.main:app --host 0.0.0.0 --port 8002"
     ports:
       - "8002:8002"
@@ -162,12 +167,13 @@ services:
       GREENFERENCE_REGISTRY_URL: http://registry:5000
       GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
       GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
+      GREENFERENCE_BUS_TRANSPORT: nats
       PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/builder/src
     depends_on:
       migrate:
         condition: service_completed_successfully
     command: >
-      sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      sh -lc "pip install nats-py psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
       uvicorn greenference_builder.main:app --host 0.0.0.0 --port 8003"
     ports:
       - "8003:8003"
