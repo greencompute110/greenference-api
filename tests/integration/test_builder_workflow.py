@@ -50,6 +50,8 @@ def test_builder_processes_accepted_build_events(monkeypatch) -> None:
     assert saved.registry_repository == "greenference/echo"
     assert saved.image_tag == "latest"
     assert saved.artifact_digest is not None
+    assert saved.registry_manifest_uri == f"{saved.artifact_uri}@{saved.artifact_digest}"
+    assert saved.executor_name == "simulated-buildkit"
     assert len(published_events) == 1
 
 
@@ -110,10 +112,14 @@ def test_builder_persists_context_and_build_events(monkeypatch) -> None:
     assert context.source_uri == "s3://greenference/builds/echo.zip"
     assert context.dockerfile_object_uri == "s3://greenference/builds/echo.zip.docker_Inference.Dockerfile"
     assert context.context_digest is not None
+    assert context.staged_context_uri == f"s3://greenference-build-artifacts/contexts/{build.build_id}/context.tar.gz"
+    assert context.context_manifest_uri == f"s3://greenference-build-artifacts/manifests/{build.build_id}.json"
     assert saved is not None
-    assert saved.build_log_uri == f"s3://greenference/build-logs/{build.build_id}.log"
+    assert saved.build_log_uri == f"s3://greenference-build-artifacts/build-logs/{build.build_id}.log"
+    assert saved.registry_manifest_uri == f"{saved.artifact_uri}@{saved.artifact_digest}"
+    assert saved.executor_name == "simulated-buildkit"
     assert saved.build_duration_seconds is not None
-    assert [event.stage for event in events] == ["accepted", "building", "published"]
+    assert [event.stage for event in events] == ["accepted", "building", "staged", "published"]
 
 
 def test_control_plane_fails_expired_leases_and_emits_event() -> None:

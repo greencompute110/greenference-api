@@ -27,7 +27,9 @@ class BuilderRepository:
             row.image_tag = build.image_tag
             row.artifact_uri = build.artifact_uri
             row.artifact_digest = build.artifact_digest
+            row.registry_manifest_uri = build.registry_manifest_uri
             row.build_log_uri = build.build_log_uri
+            row.executor_name = build.executor_name
             row.build_duration_seconds = build.build_duration_seconds
             row.failure_reason = build.failure_reason
             row.created_at = build.created_at
@@ -43,6 +45,8 @@ class BuilderRepository:
             row.dockerfile_path = context.dockerfile_path
             row.dockerfile_object_uri = context.dockerfile_object_uri
             row.context_digest = context.context_digest
+            row.staged_context_uri = context.staged_context_uri
+            row.context_manifest_uri = context.context_manifest_uri
             row.created_at = context.created_at
             session.add(row)
         return context
@@ -59,6 +63,8 @@ class BuilderRepository:
                 dockerfile_path=row.dockerfile_path,
                 dockerfile_object_uri=row.dockerfile_object_uri,
                 context_digest=row.context_digest,
+                staged_context_uri=row.staged_context_uri,
+                context_manifest_uri=row.context_manifest_uri,
                 created_at=row.created_at,
             )
 
@@ -107,7 +113,9 @@ class BuilderRepository:
                 image_tag=row.image_tag,
                 artifact_uri=row.artifact_uri,
                 artifact_digest=row.artifact_digest,
+                registry_manifest_uri=row.registry_manifest_uri,
                 build_log_uri=row.build_log_uri,
+                executor_name=row.executor_name,
                 build_duration_seconds=row.build_duration_seconds,
                 failure_reason=row.failure_reason,
                 created_at=row.created_at,
@@ -132,7 +140,9 @@ class BuilderRepository:
                     image_tag=row.image_tag,
                     artifact_uri=row.artifact_uri,
                     artifact_digest=row.artifact_digest,
+                    registry_manifest_uri=row.registry_manifest_uri,
                     build_log_uri=row.build_log_uri,
+                    executor_name=row.executor_name,
                     build_duration_seconds=row.build_duration_seconds,
                     failure_reason=row.failure_reason,
                     created_at=row.created_at,

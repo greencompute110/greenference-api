@@ -12,6 +12,12 @@ from greenference_persistence import (
     load_runtime_settings,
 )
 from greenference_protocol import BuildContextRecord, BuildEventRecord, BuildRecord, BuildRequest
+from greenference_builder.infrastructure.execution import (
+    ObjectStoreAdapter,
+    RegistryAdapter,
+    SimulatedObjectStoreAdapter,
+    SimulatedRegistryAdapter,
+)
 from greenference_builder.infrastructure.repository import BuilderRepository
 
 
@@ -21,6 +27,8 @@ class BuilderService:
         repository: BuilderRepository | None = None,
         workflow_repository: WorkflowEventRepository | None = None,
         bus: SubjectBus | None = None,
+        object_store: ObjectStoreAdapter | None = None,
+        registry: RegistryAdapter | None = None,
     ) -> None:
         self.repository = repository or BuilderRepository()
         self.workflow_repository = workflow_repository or WorkflowEventRepository(
@@ -35,6 +43,8 @@ class BuilderService:
             nats_url=self.settings.nats_url,
             transport=self.settings.bus_transport,
         )
+        self.object_store = object_store or SimulatedObjectStoreAdapter(self.settings)
+        self.registry = registry or SimulatedRegistryAdapter(self.settings)
         self.metrics = get_metrics_store("greenference-builder")
 
     def start_build(self, request: BuildRequest) -> BuildRecord:
@@ -93,9 +103,6 @@ class BuilderService:
     def process_pending_events(self, limit: int = 10) -> list[BuildRecord]:
         events = self.bus.claim_pending("builder-worker", ["build.accepted"], limit=limit)
         processed: list[BuildRecord] = []
-        registry_ref = urlparse(self.settings.registry_url).netloc or self.settings.registry_url.replace(
-            "http://", ""
-        ).replace("https://", "")
 
         for event in events:
             build = self.repository.get_build(str(event.payload["build_id"]))
@@ -107,6 +114,7 @@ class BuilderService:
             try:
                 build.status = "building"
                 build.failure_reason = None
+                build.executor_name = None
                 build.updated_at = datetime.now(UTC)
                 self.repository.save_build(build)
                 self.repository.add_build_event(
@@ -126,16 +134,27 @@ class BuilderService:
                 self.metrics.increment("build.started")
 
                 self._validate_context_uri(build.context_uri)
-                repository, image_tag = self._split_image_ref(build.image)
-                digest = hashlib.sha256(
-                    f"{build.build_id}:{build.image}:{build.context_uri}:{build.dockerfile_path}".encode()
-                ).hexdigest()
+                context = self.repository.get_build_context(build.build_id)
+                if context is None:
+                    raise ValueError("build context not found")
+                staged = self.object_store.stage_context(build, context)
+                self.repository.save_build_context(staged.context)
+                self.repository.add_build_event(
+                    BuildEventRecord(
+                        build_id=build.build_id,
+                        stage="staged",
+                        message=staged.message,
+                    )
+                )
+                published = self.registry.publish(build, staged.context)
                 build.status = "published"
-                build.registry_repository = repository
-                build.image_tag = image_tag
-                build.artifact_digest = f"sha256:{digest}"
-                build.artifact_uri = f"oci://{registry_ref.rstrip('/')}/{build.image}"
-                build.build_log_uri = self._build_log_uri(build.build_id)
+                build.registry_repository = published.registry_repository
+                build.image_tag = published.image_tag
+                build.artifact_digest = published.artifact_digest
+                build.artifact_uri = published.artifact_uri
+                build.registry_manifest_uri = published.registry_manifest_uri
+                build.build_log_uri = staged.log_uri
+                build.executor_name = published.executor_name
                 build.build_duration_seconds = max(
                     (datetime.now(UTC) - started_at).total_seconds(),
                     0.001,
@@ -146,7 +165,7 @@ class BuilderService:
                     BuildEventRecord(
                         build_id=build.build_id,
                         stage="published",
-                        message=f"published artifact {build.artifact_uri}",
+                        message=published.message,
                     )
                 )
                 self.bus.publish(
@@ -155,6 +174,7 @@ class BuilderService:
                         "build_id": build.build_id,
                         "artifact_uri": build.artifact_uri,
                         "artifact_digest": build.artifact_digest,
+                        "registry_manifest_uri": build.registry_manifest_uri,
                     },
                 )
                 self.metrics.increment("build.published")
@@ -162,7 +182,7 @@ class BuilderService:
             except ValueError as exc:
                 build.status = "failed"
                 build.failure_reason = str(exc)
-                build.build_log_uri = self._build_log_uri(build.build_id)
+                build.build_log_uri = self.object_store.build_log_uri(build.build_id)
                 build.build_duration_seconds = max(
                     (datetime.now(UTC) - started_at).total_seconds(),
                     0.001,
@@ -210,14 +230,6 @@ class BuilderService:
             raise ValueError("build context uri missing object path")
 
     @staticmethod
-    def _split_image_ref(image: str) -> tuple[str, str]:
-        last_slash = image.rfind("/")
-        last_colon = image.rfind(":")
-        if last_colon > last_slash:
-            return image[:last_colon], image[last_colon + 1 :]
-        return image, "latest"
-
-    @staticmethod
     def _normalized_context_uri(context_uri: str) -> str:
         parsed = urlparse(context_uri)
         path = parsed.path or ""
@@ -231,10 +243,5 @@ class BuilderService:
     @staticmethod
     def _context_digest(build_id: str, context_uri: str, dockerfile_path: str) -> str:
         return f"sha256:{hashlib.sha256(f'{build_id}:{context_uri}:{dockerfile_path}'.encode()).hexdigest()}"
-
-    @staticmethod
-    def _build_log_uri(build_id: str) -> str:
-        return f"s3://greenference/build-logs/{build_id}.log"
-
 
 service = BuilderService()

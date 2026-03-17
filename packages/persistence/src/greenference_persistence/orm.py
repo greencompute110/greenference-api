@@ -216,7 +216,9 @@ class BuildORM(Base):
     image_tag: Mapped[str | None] = mapped_column(String(128), nullable=True)
     artifact_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     artifact_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    registry_manifest_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     build_log_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    executor_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     build_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -232,6 +234,8 @@ class BuildContextORM(Base):
     dockerfile_path: Mapped[str] = mapped_column(String(256))
     dockerfile_object_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     context_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    staged_context_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    context_manifest_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

@@ -164,7 +164,12 @@ def test_gateway_admin_routes_expose_build_and_invocation_history(
     assert build_record["status"] == "published"
     assert build_record["artifact_digest"] is not None
     assert build_context["normalized_context_uri"] == "s3://ctx.zip"
-    assert [event["stage"] for event in build_events] == ["accepted", "building", "published"]
+    assert build_context["staged_context_uri"] == (
+        f"s3://greenference-build-artifacts/contexts/{build['build_id']}/context.tar.gz"
+    )
+    assert build_record["registry_manifest_uri"] == f"{build_record['artifact_uri']}@{build_record['artifact_digest']}"
+    assert build_record["executor_name"] == "simulated-buildkit"
+    assert [event["stage"] for event in build_events] == ["accepted", "building", "staged", "published"]
     assert len(invocation_records) == 1
     assert invocation_records[0]["latency_ms"] == 12.5
     assert invocation_export["summary"]["count"] == 1
