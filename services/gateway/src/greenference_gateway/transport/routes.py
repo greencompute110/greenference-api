@@ -418,7 +418,7 @@ def cancel_build(
 
 @router.post("/platform/workloads")
 def create_workload(
-    payload: dict,
+    payload: WorkloadCreateRequest | dict,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
@@ -426,22 +426,30 @@ def create_workload(
     enforce_rate_limit("create_workload", api_key.key_id, limit=30, window_seconds=60)
     if api_key.user_id is None:
         raise HTTPException(status_code=403, detail="api key must be bound to a user")
-    template = payload.get("template")
+    payload_data = payload if isinstance(payload, dict) else payload.model_dump(mode="json")
+    template = payload_data.get("template")
     if template == "vllm":
         from greenference_gateway.domain.templates import build_vllm_workload
-        model = payload.get("model")
+        model = payload_data.get("model")
         if not model:
             raise HTTPException(status_code=400, detail="model required for vllm template")
-        request = build_vllm_workload(model, **{k: v for k, v in payload.items() if k not in ("template", "model")})
+        request = build_vllm_workload(
+            model,
+            **{k: v for k, v in payload_data.items() if k not in ("template", "model")},
+        )
     elif template == "diffusion":
         from greenference_gateway.domain.templates import build_diffusion_workload
-        model = payload.get("model")
-        name = payload.get("name", model or "diffusion")
+        model = payload_data.get("model")
+        name = payload_data.get("name", model or "diffusion")
         if not model:
             raise HTTPException(status_code=400, detail="model required for diffusion template")
-        request = build_diffusion_workload(model, name, **{k: v for k, v in payload.items() if k not in ("template", "model", "name")})
+        request = build_diffusion_workload(
+            model,
+            name,
+            **{k: v for k, v in payload_data.items() if k not in ("template", "model", "name")},
+        )
     else:
-        request = WorkloadCreateRequest(**payload)
+        request = WorkloadCreateRequest(**payload_data)
     return service.create_workload(request, api_key.user_id).model_dump(mode="json")
 
 

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import os
+import tempfile
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 from urllib.parse import urlparse
 
 from greenference_persistence import (
@@ -73,10 +77,11 @@ class BuilderService:
         }
 
     def start_build(self, request: BuildRequest, *, owner_user_id: str | None = None) -> BuildRecord:
+        context_uri = self._materialize_context_source(request)
         build = BuildRecord(
             image=request.image,
             owner_user_id=owner_user_id,
-            context_uri=request.context_uri,
+            context_uri=context_uri,
             dockerfile_path=request.dockerfile_path,
             display_name=request.display_name,
             readme=request.readme,
@@ -91,11 +96,11 @@ class BuilderService:
         self.repository.save_build_context(
             BuildContextRecord(
                 build_id=saved.build_id,
-                source_uri=request.context_uri,
-                normalized_context_uri=self._normalized_context_uri(request.context_uri),
+                source_uri=context_uri,
+                normalized_context_uri=self._normalized_context_uri(context_uri),
                 dockerfile_path=request.dockerfile_path,
-                dockerfile_object_uri=self._dockerfile_object_uri(request.context_uri, request.dockerfile_path),
-                context_digest=self._context_digest(saved.build_id, request.context_uri, request.dockerfile_path),
+                dockerfile_object_uri=self._dockerfile_object_uri(context_uri, request.dockerfile_path),
+                context_digest=self._context_digest(saved.build_id, context_uri, request.dockerfile_path),
             )
         )
         self.repository.add_build_event(
@@ -915,6 +920,24 @@ class BuilderService:
     @staticmethod
     def _context_digest(build_id: str, context_uri: str, dockerfile_path: str) -> str:
         return f"sha256:{hashlib.sha256(f'{build_id}:{context_uri}:{dockerfile_path}'.encode()).hexdigest()}"
+
+    def _materialize_context_source(self, request: BuildRequest) -> str:
+        if request.context_archive_b64:
+            archive_name = request.context_archive_name or "build-context.zip"
+            suffix = Path(archive_name).suffix or ".zip"
+            context_dir = Path(tempfile.gettempdir()) / "greenference-builder-contexts"
+            context_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                prefix="greenference-build-",
+                suffix=suffix,
+                dir=context_dir,
+                delete=False,
+            ) as outfile:
+                outfile.write(base64.b64decode(request.context_archive_b64.encode()))
+            return Path(outfile.name).resolve().as_uri()
+        if request.context_uri is None:
+            raise ValueError("build request requires context_uri or context_archive_b64")
+        return request.context_uri
 
     @staticmethod
     def _ensure_utc(timestamp: datetime) -> datetime:

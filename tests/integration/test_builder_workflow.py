@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+import base64
 
 from sqlalchemy import select
 
@@ -123,6 +124,32 @@ def test_builder_persists_context_and_build_events(monkeypatch) -> None:
     assert saved.executor_name == "simulated-buildkit"
     assert saved.build_duration_seconds is not None
     assert [event.stage for event in events] == ["accepted", "job_started", "staging", "building", "publishing"]
+
+
+def test_builder_accepts_inline_context_archive(monkeypatch) -> None:
+    shared_db = "sqlite+pysqlite:///:memory:"
+    monkeypatch.setenv("GREENFERENCE_REGISTRY_URL", "http://registry.greenference.local:5000")
+    repository = BuilderRepository(database_url=shared_db, bootstrap=True)
+    workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
+    builder = BuilderService(repository, workflow_repository=workflow_repository)
+
+    build = builder.start_build(
+        BuildRequest(
+            image="greenference/sdk:latest",
+            context_archive_b64=base64.b64encode(b"fake-archive").decode(),
+            context_archive_name="sdk-context.zip",
+        )
+    )
+    builder.process_pending_events(limit=5)
+
+    saved = builder.get_build(build.build_id)
+    context = builder.get_build_context(build.build_id)
+
+    assert saved is not None
+    assert saved.context_uri.startswith("file://")
+    assert saved.status == "published"
+    assert context is not None
+    assert context.source_uri.startswith("file://")
 
 
 def test_builder_retry_and_cleanup_recover_transient_failure(monkeypatch) -> None:
