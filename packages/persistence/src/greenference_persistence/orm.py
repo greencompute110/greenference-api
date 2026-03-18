@@ -297,6 +297,8 @@ class BuildJobORM(Base):
     attempt: Mapped[int] = mapped_column(Integer, index=True)
     status: Mapped[str] = mapped_column(String(32), index=True, default="queued")
     current_stage: Mapped[str] = mapped_column(String(64), index=True, default="accepted")
+    last_completed_stage: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    stage_state: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     restarted_from_attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
     restarted_from_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     restart_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)

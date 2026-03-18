@@ -52,6 +52,7 @@ class BuildStageResult:
     stage: str
     next_stage: str | None
     message: str
+    stage_state: dict[str, str] | None = None
     context: BuildContextRecord | None = None
     published_image: PublishedImage | None = None
 
@@ -111,6 +112,11 @@ class AdapterBackedBuildRunner(BuildRunner):
                 stage="staging",
                 next_stage="building",
                 message=staged.message,
+                stage_state={
+                    "staged_context_uri": staged.context.staged_context_uri or "",
+                    "context_manifest_uri": staged.context.context_manifest_uri or "",
+                    "log_uri": staged.log_uri,
+                },
                 context=staged.context,
             )
         if stage == "building":
@@ -118,6 +124,11 @@ class AdapterBackedBuildRunner(BuildRunner):
                 stage="building",
                 next_stage="publishing",
                 message="prepared staged context for registry publish",
+                stage_state={
+                    "staged_context_uri": context.staged_context_uri or "",
+                    "context_manifest_uri": context.context_manifest_uri or "",
+                    "prepared": "true",
+                },
                 context=context,
             )
         if stage == "publishing":
@@ -126,6 +137,13 @@ class AdapterBackedBuildRunner(BuildRunner):
                 stage="publishing",
                 next_stage=None,
                 message=published.message,
+                stage_state={
+                    "artifact_uri": published.artifact_uri,
+                    "artifact_digest": published.artifact_digest,
+                    "registry_manifest_uri": published.registry_manifest_uri,
+                    "registry_repository": published.registry_repository,
+                    "image_tag": published.image_tag,
+                },
                 context=context,
                 published_image=published,
             )

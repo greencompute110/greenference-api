@@ -162,6 +162,7 @@ When debugging a local stack issue, the highest-signal checks are:
 - `GET /platform/v1/debug/routing-decisions` on `gateway`
 - `GET /platform/v1/debug/build-failures` on `gateway`
 - `GET /platform/builds/{id}/jobs`, `/jobs/latest`, `/jobs/latest/timeline`, `/logs`, `/logs/stream`, and `/attempts/{attempt}` on `gateway`
+  `jobs/latest` now includes `last_completed_stage` and `stage_state` for recovery inspection.
 - `POST /platform/builds/{id}/jobs/latest/cancel` and `/restart` on `gateway`
 - `GET /platform/builds/recovery/status` and `POST /platform/builds/recovery` on `gateway`
 - `GET /platform/v1/debug/invocation-failures` on `gateway`

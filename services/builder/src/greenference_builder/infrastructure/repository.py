@@ -143,6 +143,8 @@ class BuilderRepository:
             row.attempt = job.attempt
             row.status = job.status
             row.current_stage = job.current_stage
+            row.last_completed_stage = job.last_completed_stage
+            row.stage_state = job.stage_state
             row.restarted_from_attempt = job.restarted_from_attempt
             row.restarted_from_job_id = job.restarted_from_job_id
             row.restart_reason = job.restart_reason
@@ -356,6 +358,8 @@ class BuilderRepository:
             attempt=row.attempt,
             status=row.status,
             current_stage=row.current_stage,
+            last_completed_stage=row.last_completed_stage,
+            stage_state=row.stage_state or {},
             restarted_from_attempt=row.restarted_from_attempt,
             restarted_from_job_id=row.restarted_from_job_id,
             restart_reason=row.restart_reason,

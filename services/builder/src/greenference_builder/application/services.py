@@ -213,6 +213,11 @@ class BuilderService:
             latest_job.recovery_count += 1
             latest_job.last_recovered_at = recovered_at
             latest_job.progress_message = f"recovered build job at stage {latest_job.current_stage}"
+            latest_job.stage_state = {
+                **latest_job.stage_state,
+                "recovered": "true",
+                "recovered_at": recovered_at.isoformat(),
+            }
             latest_job.updated_at = recovered_at
             self.repository.save_build_job(latest_job)
             self._record_job_checkpoint(
@@ -530,6 +535,11 @@ class BuilderService:
                 attempt=attempt_number,
                 status="queued",
                 current_stage=preparation.initial_stage,
+                last_completed_stage=None,
+                stage_state={
+                    "log_uri": preparation.log_uri,
+                    "prepared_message": preparation.message,
+                },
                 restarted_from_attempt=attempt.restarted_from_attempt,
                 restarted_from_job_id=attempt.restarted_from_job_id,
                 restart_reason=attempt.restart_reason,
@@ -596,6 +606,11 @@ class BuilderService:
             return None
         now = datetime.now(UTC)
         job.status = "running"
+        job.stage_state = {
+            **job.stage_state,
+            "active_stage": job.current_stage,
+            "active_stage_started_at": now.isoformat(),
+        }
         job.updated_at = now
         self.repository.save_build_job(job)
         self._record_job_checkpoint(
@@ -627,7 +642,14 @@ class BuilderService:
         now = datetime.now(UTC)
         if result.context is not None:
             self.repository.save_build_context(result.context)
+        next_stage_state = dict(job.stage_state)
+        if result.stage_state:
+            next_stage_state.update(result.stage_state)
+        next_stage_state["last_stage_message"] = result.message
+        next_stage_state["last_stage_completed_at"] = now.isoformat()
         job.progress_message = result.message
+        job.last_completed_stage = result.stage
+        job.stage_state = next_stage_state
         job.updated_at = now
         build.updated_at = now
         self._record_job_checkpoint(
@@ -654,6 +676,10 @@ class BuilderService:
         )
         if result.next_stage is not None:
             job.current_stage = result.next_stage
+            job.stage_state = {
+                **job.stage_state,
+                "next_stage": result.next_stage,
+            }
             self.repository.save_build_job(job)
             self._record_job_checkpoint(
                 job,
@@ -692,6 +718,10 @@ class BuilderService:
         job.status = "succeeded"
         job.current_stage = "succeeded"
         job.executor_name = result.published_image.executor_name
+        job.stage_state = {
+            **job.stage_state,
+            "final_status": "succeeded",
+        }
         job.finished_at = now
         job.updated_at = now
         self.repository.save_build_job(job)
@@ -760,6 +790,11 @@ class BuilderService:
         job.current_stage = "failed"
         job.failure_class = build.failure_class
         job.progress_message = build.failure_reason
+        job.stage_state = {
+            **job.stage_state,
+            "final_status": "failed",
+            "failed_operation": exc.operation,
+        }
         if not exc.retryable or build.retry_count >= 2:
             job.finished_at = now
         job.updated_at = now
@@ -798,6 +833,11 @@ class BuilderService:
             job.status = "queued"
             job.current_stage = str(event.payload.get("stage", "staging"))
             job.failure_class = None
+            job.stage_state = {
+                **job.stage_state,
+                "retry_after_failure": "true",
+                "next_stage": job.current_stage,
+            }
             job.finished_at = None
             job.updated_at = now
             self.repository.save_build(build)
