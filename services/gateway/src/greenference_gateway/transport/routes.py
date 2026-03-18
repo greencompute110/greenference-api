@@ -135,6 +135,34 @@ def get_latest_build_job(
     return job.model_dump(mode="json")
 
 
+@router.post("/platform/builds/{build_id}/jobs/latest/cancel")
+def cancel_latest_build_job(
+    build_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    try:
+        return service.cancel_latest_build_job(build_id).model_dump(mode="json")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/platform/builds/{build_id}/jobs/latest/restart")
+def restart_latest_build_job(
+    build_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    try:
+        return service.restart_latest_build_job(build_id).model_dump(mode="json")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/platform/builds/{build_id}/attempts/{attempt}")
 def get_build_attempt(
     build_id: str,

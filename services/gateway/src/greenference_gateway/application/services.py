@@ -97,6 +97,12 @@ class GatewayService:
     def list_build_jobs(self, build_id: str) -> list[BuildJobRecord]:
         return self.builder.list_build_jobs(build_id)
 
+    def cancel_latest_build_job(self, build_id: str) -> BuildRecord:
+        return self.builder.cancel_latest_job(build_id)
+
+    def restart_latest_build_job(self, build_id: str) -> BuildRecord:
+        return self.builder.restart_latest_job(build_id)
+
     def build_attempts(self, build_id: str) -> list[dict]:
         return self.builder.build_attempts(build_id)
 

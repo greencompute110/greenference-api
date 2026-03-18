@@ -133,6 +133,7 @@ class BuilderRepository:
             row.current_stage = job.current_stage
             row.executor_name = job.executor_name
             row.failure_class = job.failure_class
+            row.progress_message = job.progress_message
             row.started_at = job.started_at
             row.finished_at = job.finished_at
             row.updated_at = job.updated_at
@@ -291,6 +292,7 @@ class BuilderRepository:
             current_stage=row.current_stage,
             executor_name=row.executor_name,
             failure_class=row.failure_class,
+            progress_message=row.progress_message,
             started_at=row.started_at,
             finished_at=row.finished_at,
             updated_at=row.updated_at,

@@ -39,11 +39,34 @@ class PublishedImage:
     message: str
 
 
+@dataclass(slots=True)
+class BuildPreparation:
+    executor_name: str
+    log_uri: str
+    message: str
+    initial_stage: str = "staging"
+
+
+@dataclass(slots=True)
+class BuildStageResult:
+    stage: str
+    next_stage: str | None
+    message: str
+    context: BuildContextRecord | None = None
+    published_image: PublishedImage | None = None
+
+
 class BuildRunner:
-    def stage_context(self, build: BuildRecord, context: BuildContextRecord) -> StagedContext:
+    def prepare_job(self, build: BuildRecord, context: BuildContextRecord) -> BuildPreparation:
         raise NotImplementedError
 
-    def publish_image(self, build: BuildRecord, context: BuildContextRecord) -> PublishedImage:
+    def run_stage(self, build: BuildRecord, context: BuildContextRecord, stage: str) -> BuildStageResult:
+        raise NotImplementedError
+
+    def finalize_success(self, build: BuildRecord, published: PublishedImage) -> BuildRecord:
+        raise NotImplementedError
+
+    def finalize_failure(self, build: BuildRecord, exc: BuilderExecutionError) -> BuildRecord:
         raise NotImplementedError
 
     def build_log_uri(self, build_id: str) -> str:
@@ -74,11 +97,62 @@ class AdapterBackedBuildRunner(BuildRunner):
         self.object_store = object_store
         self.registry = registry
 
-    def stage_context(self, build: BuildRecord, context: BuildContextRecord) -> StagedContext:
-        return self.object_store.stage_context(build, context)
+    def prepare_job(self, build: BuildRecord, context: BuildContextRecord) -> BuildPreparation:
+        return BuildPreparation(
+            executor_name="adapter-runner",
+            log_uri=self.object_store.build_log_uri(build.build_id),
+            message="prepared build job for staged execution",
+        )
 
-    def publish_image(self, build: BuildRecord, context: BuildContextRecord) -> PublishedImage:
-        return self.registry.publish(build, context)
+    def run_stage(self, build: BuildRecord, context: BuildContextRecord, stage: str) -> BuildStageResult:
+        if stage == "staging":
+            staged = self.object_store.stage_context(build, context)
+            return BuildStageResult(
+                stage="staging",
+                next_stage="building",
+                message=staged.message,
+                context=staged.context,
+            )
+        if stage == "building":
+            return BuildStageResult(
+                stage="building",
+                next_stage="publishing",
+                message="prepared staged context for registry publish",
+                context=context,
+            )
+        if stage == "publishing":
+            published = self.registry.publish(build, context)
+            return BuildStageResult(
+                stage="publishing",
+                next_stage=None,
+                message=published.message,
+                context=context,
+                published_image=published,
+            )
+        raise ValueError(f"unsupported build stage: {stage}")
+
+    def finalize_success(self, build: BuildRecord, published: PublishedImage) -> BuildRecord:
+        build.status = "published"
+        build.registry_repository = published.registry_repository
+        build.image_tag = published.image_tag
+        build.artifact_digest = published.artifact_digest
+        build.artifact_uri = published.artifact_uri
+        build.registry_manifest_uri = published.registry_manifest_uri
+        build.executor_name = published.executor_name
+        build.failure_class = None
+        build.failure_reason = None
+        build.cleanup_status = None
+        build.last_operation = "published"
+        build.updated_at = datetime.now(UTC)
+        return build
+
+    def finalize_failure(self, build: BuildRecord, exc: BuilderExecutionError) -> BuildRecord:
+        build.status = "failed"
+        build.failure_reason = str(exc)
+        build.failure_class = exc.failure_class
+        build.last_operation = exc.operation
+        build.updated_at = datetime.now(UTC)
+        return build
 
     def build_log_uri(self, build_id: str) -> str:
         return self.object_store.build_log_uri(build_id)

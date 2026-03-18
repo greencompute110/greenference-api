@@ -18,6 +18,7 @@ from greenference_protocol import BuildAttemptRecord, BuildContextRecord, BuildE
 from greenference_builder.infrastructure.execution import (
     AdapterBackedBuildRunner,
     BuildRunner,
+    BuildStageResult,
     BuilderExecutionError,
     ObjectStoreAdapter,
     RegistryAdapter,
@@ -88,6 +89,7 @@ class BuilderService:
             {
                 "build_id": saved.build_id,
                 "image": saved.image,
+                "attempt": 1,
             },
         )
         self.metrics.increment("build.accepted")
@@ -134,6 +136,20 @@ class BuilderService:
 
     def list_build_jobs(self, build_id: str) -> list[BuildJobRecord]:
         return self.repository.list_build_jobs(build_id)
+
+    def restart_latest_job(self, build_id: str) -> BuildRecord:
+        latest_job = self.repository.get_build_job(build_id)
+        if latest_job is None:
+            raise KeyError(f"build job not found: {build_id}")
+        if latest_job.finished_at is None and latest_job.status not in {"failed", "cancelled"}:
+            raise ValueError("running job cannot be restarted")
+        return self.retry_build(build_id)
+
+    def cancel_latest_job(self, build_id: str) -> BuildRecord:
+        latest_job = self.repository.get_build_job(build_id)
+        if latest_job is None:
+            raise KeyError(f"build job not found: {build_id}")
+        return self.cancel_build(build_id)
 
     def list_image_history(self, image: str) -> list[BuildRecord]:
         return self.repository.list_builds(image=image)
@@ -184,7 +200,10 @@ class BuilderService:
         self.repository.add_build_event(
             BuildEventRecord(build_id=build.build_id, stage="retry_requested", message="build retry requested")
         )
-        self.bus.publish("build.accepted", {"build_id": build.build_id, "image": build.image})
+        self.bus.publish(
+            "build.accepted",
+            {"build_id": build.build_id, "image": build.image, "attempt": build.retry_count + 1},
+        )
         self.metrics.increment("build.retry_requested")
         return build
 
@@ -252,7 +271,7 @@ class BuilderService:
         return build
 
     def process_pending_events(self, limit: int = 10) -> list[BuildRecord]:
-        events = self.bus.claim_pending("builder-worker", ["build.accepted"], limit=limit)
+        events = self.bus.claim_pending("builder-worker", ["build.accepted", "build.job.progress"], limit=limit)
         processed: list[BuildRecord] = []
 
         for event in events:
@@ -261,7 +280,6 @@ class BuilderService:
                 self.bus.mark_failed(event.delivery_id, "build not found")
                 self.metrics.increment("build.failed")
                 continue
-            started_at = datetime.now(UTC)
             try:
                 if build.status == "cancelled":
                     self.bus.mark_completed(event.delivery_id)
@@ -269,293 +287,37 @@ class BuilderService:
                 if build.status == "published":
                     self.bus.mark_completed(event.delivery_id)
                     continue
-                attempt_number = max(1, event.attempts)
-                attempt = BuildAttemptRecord(
-                    build_id=build.build_id,
-                    attempt=attempt_number,
-                    status="staging",
-                )
-                self.repository.save_build_attempt(attempt)
-                job = BuildJobRecord(
-                    build_id=build.build_id,
-                    attempt=attempt_number,
-                    status="running",
-                    current_stage="prepare",
-                )
-                self.repository.save_build_job(job)
-                build.status = "building"
-                build.failure_reason = None
-                build.failure_class = None
-                build.executor_name = None
-                build.last_operation = "prepare"
-                build.updated_at = datetime.now(UTC)
-                self.repository.save_build(build)
-                self.repository.add_build_event(
-                    BuildEventRecord(
-                        build_id=build.build_id,
-                        stage="building",
-                        message="validated build context and prepared registry target",
-                    )
-                )
-                self.repository.add_build_log(
-                    BuildLogRecord(
-                        build_id=build.build_id,
-                        attempt=attempt_number,
-                        stage="building",
-                        message="validated build context and prepared registry target",
-                    )
-                )
-                self.bus.publish(
-                    "build.started",
-                    {
-                        "build_id": build.build_id,
-                        "image": build.image,
-                    },
-                )
-                self.metrics.increment("build.started")
-
-                self._validate_context_uri(build.context_uri)
-                context = self.repository.get_build_context(build.build_id)
-                if context is None:
-                    raise ValueError("build context not found")
-                build.last_operation = "stage_context"
-                build.status = "staging"
-                self.repository.save_build(build)
-                job.current_stage = "staging"
-                job.updated_at = datetime.now(UTC)
-                self.repository.save_build_job(job)
-                staged = self.runner.stage_context(build, context)
-                self.repository.save_build_context(staged.context)
-                self.repository.add_build_event(
-                    BuildEventRecord(
-                        build_id=build.build_id,
-                        stage="staged",
-                        message=staged.message,
-                    )
-                )
-                self.repository.add_build_log(
-                    BuildLogRecord(
-                        build_id=build.build_id,
-                        attempt=attempt_number,
-                        stage="staged",
-                        message=staged.message,
-                    )
-                )
-                build.last_operation = "publish_registry"
-                build.status = "publishing"
-                self.repository.save_build(build)
-                job.current_stage = "publishing"
-                job.updated_at = datetime.now(UTC)
-                self.repository.save_build_job(job)
-                published = self.runner.publish_image(build, staged.context)
-                build.status = "published"
-                build.registry_repository = published.registry_repository
-                build.image_tag = published.image_tag
-                build.artifact_digest = published.artifact_digest
-                build.artifact_uri = published.artifact_uri
-                build.registry_manifest_uri = published.registry_manifest_uri
-                build.build_log_uri = staged.log_uri
-                build.executor_name = published.executor_name
-                build.build_duration_seconds = max(
-                    (datetime.now(UTC) - started_at).total_seconds(),
-                    0.001,
-                )
-                build.failure_class = None
-                build.cleanup_status = None
-                build.last_operation = "published"
-                build.retry_count = max(build.retry_count, max(0, event.attempts - 1))
-                build.updated_at = datetime.now(UTC)
-                self.repository.save_build(build)
-                self.repository.add_build_event(
-                    BuildEventRecord(
-                        build_id=build.build_id,
-                        stage="published",
-                        message=published.message,
-                    )
-                )
-                self.repository.add_build_log(
-                    BuildLogRecord(
-                        build_id=build.build_id,
-                        attempt=attempt_number,
-                        stage="published",
-                        message=published.message,
-                    )
-                )
-                attempt.status = "published"
-                attempt.last_operation = "published"
-                attempt.finished_at = datetime.now(UTC)
-                self.repository.save_build_attempt(attempt)
-                job.status = "succeeded"
-                job.current_stage = "published"
-                job.executor_name = published.executor_name
-                job.finished_at = attempt.finished_at
-                job.updated_at = attempt.finished_at
-                self.repository.save_build_job(job)
-                self.bus.publish(
-                    "build.published",
-                    {
-                        "build_id": build.build_id,
-                        "artifact_uri": build.artifact_uri,
-                        "artifact_digest": build.artifact_digest,
-                        "registry_manifest_uri": build.registry_manifest_uri,
-                    },
-                )
-                self.metrics.increment("build.published")
-                processed.append(build)
-                self.bus.mark_completed(event.delivery_id)
+                if event.subject == "build.accepted":
+                    self._initialize_or_resume_job(build, event)
+                    self.bus.mark_completed(event.delivery_id)
+                    continue
+                processed_build = self._advance_job(build, event)
+                if processed_build is not None:
+                    processed.append(processed_build)
             except BuilderExecutionError as exc:
-                build.status = "failed"
-                build.failure_reason = str(exc)
-                build.failure_class = exc.failure_class
-                build.last_operation = exc.operation
-                build.retry_count = max(build.retry_count, max(0, event.attempts - 1))
-                build.build_log_uri = self.runner.build_log_uri(build.build_id)
-                build.build_duration_seconds = max(
-                    (datetime.now(UTC) - started_at).total_seconds(),
-                    0.001,
-                )
-                build.updated_at = datetime.now(UTC)
-                self.repository.save_build(build)
-                self.repository.add_build_event(
-                    BuildEventRecord(build_id=build.build_id, stage="failed", message=build.failure_reason)
-                )
-                self.repository.add_build_log(
-                    BuildLogRecord(
-                        build_id=build.build_id,
-                        attempt=attempt_number,
-                        stage="failed",
-                        message=build.failure_reason,
-                    )
-                )
-                attempt.status = "failed"
-                attempt.failure_class = build.failure_class
-                attempt.last_operation = exc.operation
-                attempt.finished_at = datetime.now(UTC)
-                self.repository.save_build_attempt(attempt)
-                job.status = "failed"
-                job.current_stage = "failed"
-                job.failure_class = build.failure_class
-                job.finished_at = attempt.finished_at
-                job.updated_at = attempt.finished_at
-                self.repository.save_build_job(job)
-                self.bus.publish(
-                    "build.failed",
-                    {
-                        "build_id": build.build_id,
-                        "image": build.image,
-                        "reason": build.failure_reason,
-                        "failure_class": build.failure_class,
-                    },
-                )
-                self.metrics.increment("build.failed")
-                if build.retry_count < 2 and exc.retryable:
-                    self.bus.mark_failed(event.delivery_id, build.failure_reason, retryable=True, retry_after_seconds=1.0)
-                else:
-                    build.retry_exhausted = not exc.retryable or build.retry_count >= 2
-                    self.repository.save_build(build)
-                    self.bus.mark_failed(event.delivery_id, build.failure_reason)
+                self._handle_job_failure(build, event, exc)
             except ValueError as exc:
-                build.status = "failed"
-                build.failure_reason = str(exc)
-                build.failure_class = "build_validation_failure"
-                build.last_operation = "validate_context"
-                build.retry_count = max(build.retry_count, max(0, event.attempts - 1))
-                build.build_log_uri = self.runner.build_log_uri(build.build_id)
-                build.build_duration_seconds = max(
-                    (datetime.now(UTC) - started_at).total_seconds(),
-                    0.001,
+                self._handle_job_failure(
+                    build,
+                    event,
+                    BuilderExecutionError(
+                        str(exc),
+                        operation="validate_context",
+                        failure_class="build_validation_failure",
+                        retryable=False,
+                    ),
                 )
-                build.updated_at = datetime.now(UTC)
-                self.repository.save_build(build)
-                self.repository.add_build_event(
-                    BuildEventRecord(
-                        build_id=build.build_id,
-                        stage="failed",
-                        message=build.failure_reason,
-                    )
-                )
-                self.repository.add_build_log(
-                    BuildLogRecord(
-                        build_id=build.build_id,
-                        attempt=attempt_number,
-                        stage="failed",
-                        message=build.failure_reason,
-                    )
-                )
-                attempt.status = "failed"
-                attempt.failure_class = build.failure_class
-                attempt.last_operation = "validate_context"
-                attempt.finished_at = datetime.now(UTC)
-                self.repository.save_build_attempt(attempt)
-                job.status = "failed"
-                job.current_stage = "failed"
-                job.failure_class = build.failure_class
-                job.finished_at = attempt.finished_at
-                job.updated_at = attempt.finished_at
-                self.repository.save_build_job(job)
-                self.bus.publish(
-                    "build.failed",
-                    {
-                        "build_id": build.build_id,
-                        "image": build.image,
-                        "reason": build.failure_reason,
-                        "failure_class": build.failure_class,
-                    },
-                )
-                self.metrics.increment("build.failed")
-                build.retry_exhausted = True
-                self.repository.save_build(build)
-                self.bus.mark_failed(event.delivery_id, build.failure_reason)
             except Exception as exc:  # noqa: BLE001
-                build.status = "failed"
-                build.failure_reason = str(exc)
-                build.failure_class = "builder_runtime_error"
-                build.last_operation = build.last_operation or "unexpected"
-                build.build_log_uri = self.runner.build_log_uri(build.build_id)
-                build.build_duration_seconds = max(
-                    (datetime.now(UTC) - started_at).total_seconds(),
-                    0.001,
+                self._handle_job_failure(
+                    build,
+                    event,
+                    BuilderExecutionError(
+                        str(exc),
+                        operation=build.last_operation or "unexpected",
+                        failure_class="builder_runtime_error",
+                        retryable=False,
+                    ),
                 )
-                build.retry_exhausted = True
-                build.updated_at = datetime.now(UTC)
-                self.repository.save_build(build)
-                self.repository.add_build_event(
-                    BuildEventRecord(
-                        build_id=build.build_id,
-                        stage="failed",
-                        message=build.failure_reason,
-                    )
-                )
-                self.repository.add_build_log(
-                    BuildLogRecord(
-                        build_id=build.build_id,
-                        attempt=attempt_number,
-                        stage="failed",
-                        message=build.failure_reason,
-                    )
-                )
-                attempt.status = "failed"
-                attempt.failure_class = build.failure_class
-                attempt.last_operation = build.last_operation
-                attempt.finished_at = datetime.now(UTC)
-                self.repository.save_build_attempt(attempt)
-                job.status = "failed"
-                job.current_stage = "failed"
-                job.failure_class = build.failure_class
-                job.finished_at = attempt.finished_at
-                job.updated_at = attempt.finished_at
-                self.repository.save_build_job(job)
-                self.bus.publish(
-                    "build.failed",
-                    {
-                        "build_id": build.build_id,
-                        "image": build.image,
-                        "reason": build.failure_reason,
-                        "failure_class": build.failure_class,
-                    },
-                )
-                self.metrics.increment("build.failed")
-                self.bus.mark_failed(event.delivery_id, build.failure_reason)
         pending_count = len(
             self.bus.list_deliveries(
                 consumer="builder-worker",
@@ -564,7 +326,287 @@ class BuilderService:
             )
         )
         self.metrics.set_gauge("workflow.pending.build.accepted", float(pending_count))
+        self.metrics.set_gauge(
+            "workflow.pending.build.job.progress",
+            float(
+                len(
+                    self.bus.list_deliveries(
+                        consumer="builder-worker",
+                        subjects=["build.job.progress"],
+                        statuses=["pending"],
+                    )
+                )
+            ),
+        )
         return processed
+
+    def _initialize_or_resume_job(self, build: BuildRecord, event) -> None:
+        self._validate_context_uri(build.context_uri)
+        context = self.repository.get_build_context(build.build_id)
+        if context is None:
+            raise ValueError("build context not found")
+        attempt_number = int(event.payload.get("attempt", build.retry_count + 1))
+        attempt = self.repository.get_build_attempt(build.build_id, attempt_number)
+        if attempt is None:
+            attempt = BuildAttemptRecord(
+                build_id=build.build_id,
+                attempt=attempt_number,
+                status="queued",
+            )
+            self.repository.save_build_attempt(attempt)
+        job = self.repository.get_build_job(build.build_id, attempt=attempt_number)
+        if job is None:
+            preparation = self.runner.prepare_job(build, context)
+            now = datetime.now(UTC)
+            build.status = "staging"
+            build.failure_reason = None
+            build.failure_class = None
+            build.executor_name = preparation.executor_name
+            build.build_log_uri = preparation.log_uri
+            build.last_operation = "prepare_job"
+            build.updated_at = now
+            self.repository.save_build(build)
+            attempt.status = "queued"
+            attempt.last_operation = "prepare_job"
+            self.repository.save_build_attempt(attempt)
+            job = BuildJobRecord(
+                build_id=build.build_id,
+                attempt=attempt_number,
+                status="queued",
+                current_stage=preparation.initial_stage,
+                executor_name=preparation.executor_name,
+                progress_message=preparation.message,
+                started_at=now,
+                updated_at=now,
+            )
+            self.repository.save_build_job(job)
+            self.repository.add_build_event(
+                BuildEventRecord(build_id=build.build_id, stage="job_started", message=preparation.message)
+            )
+            self.repository.add_build_log(
+                BuildLogRecord(
+                    build_id=build.build_id,
+                    attempt=attempt_number,
+                    stage="job_started",
+                    message=preparation.message,
+                )
+            )
+            self.bus.publish(
+                "build.job.started",
+                {
+                    "build_id": build.build_id,
+                    "attempt": attempt_number,
+                    "stage": job.current_stage,
+                    "executor_name": preparation.executor_name,
+                },
+            )
+            self.metrics.increment("build.started")
+        self.bus.publish(
+            "build.job.progress",
+            {
+                "build_id": build.build_id,
+                "attempt": attempt_number,
+                "stage": job.current_stage,
+            },
+        )
+
+    def _advance_job(self, build: BuildRecord, event) -> BuildRecord | None:
+        context = self.repository.get_build_context(build.build_id)
+        if context is None:
+            raise ValueError("build context not found")
+        attempt_number = int(event.payload.get("attempt", max(1, event.attempts)))
+        attempt = self.repository.get_build_attempt(build.build_id, attempt_number)
+        if attempt is None:
+            raise ValueError("build attempt not found")
+        job = self.repository.get_build_job(build.build_id, attempt=attempt_number)
+        if job is None:
+            raise ValueError("build job not found")
+        if job.finished_at is not None or job.status in {"succeeded", "failed", "cancelled"}:
+            self.bus.mark_completed(event.delivery_id)
+            return None
+        now = datetime.now(UTC)
+        job.status = "running"
+        job.updated_at = now
+        self.repository.save_build_job(job)
+        attempt.status = job.current_stage
+        attempt.last_operation = job.current_stage
+        self.repository.save_build_attempt(attempt)
+        build.status = job.current_stage
+        build.last_operation = job.current_stage
+        build.updated_at = now
+        self.repository.save_build(build)
+
+        result = self.runner.run_stage(build, context, job.current_stage)
+        return self._apply_stage_result(build, attempt, job, result, event.delivery_id)
+
+    def _apply_stage_result(
+        self,
+        build: BuildRecord,
+        attempt: BuildAttemptRecord,
+        job: BuildJobRecord,
+        result: BuildStageResult,
+        delivery_id: str,
+    ) -> BuildRecord:
+        now = datetime.now(UTC)
+        if result.context is not None:
+            self.repository.save_build_context(result.context)
+        job.progress_message = result.message
+        job.updated_at = now
+        build.updated_at = now
+        self.repository.add_build_event(
+            BuildEventRecord(build_id=build.build_id, stage=result.stage, message=result.message)
+        )
+        self.repository.add_build_log(
+            BuildLogRecord(build_id=build.build_id, attempt=attempt.attempt, stage=result.stage, message=result.message)
+        )
+        self.bus.publish(
+            "build.job.progress",
+            {
+                "build_id": build.build_id,
+                "attempt": attempt.attempt,
+                "stage": result.stage,
+                "message": result.message,
+            },
+        )
+        if result.next_stage is not None:
+            job.current_stage = result.next_stage
+            self.repository.save_build_job(job)
+            build.status = result.next_stage
+            build.last_operation = result.stage
+            self.repository.save_build(build)
+            attempt.status = result.next_stage
+            attempt.last_operation = result.stage
+            self.repository.save_build_attempt(attempt)
+            self.bus.publish(
+                "build.job.progress",
+                {
+                    "build_id": build.build_id,
+                    "attempt": attempt.attempt,
+                    "stage": result.next_stage,
+                },
+            )
+            self.bus.mark_completed(delivery_id)
+            return build
+
+        if result.published_image is None:
+            raise ValueError("terminal build stage missing published image")
+        build = self.runner.finalize_success(build, result.published_image)
+        build.build_duration_seconds = max((now - attempt.started_at).total_seconds(), 0.001)
+        build.retry_count = max(build.retry_count, max(0, attempt.attempt - 1))
+        self.repository.save_build(build)
+        attempt.status = "published"
+        attempt.last_operation = "published"
+        attempt.finished_at = now
+        self.repository.save_build_attempt(attempt)
+        job.status = "succeeded"
+        job.current_stage = "succeeded"
+        job.executor_name = result.published_image.executor_name
+        job.finished_at = now
+        job.updated_at = now
+        self.repository.save_build_job(job)
+        self.bus.publish(
+            "build.job.succeeded",
+            {
+                "build_id": build.build_id,
+                "attempt": attempt.attempt,
+                "artifact_uri": build.artifact_uri,
+                "artifact_digest": build.artifact_digest,
+            },
+        )
+        self.bus.publish(
+            "build.published",
+            {
+                "build_id": build.build_id,
+                "artifact_uri": build.artifact_uri,
+                "artifact_digest": build.artifact_digest,
+                "registry_manifest_uri": build.registry_manifest_uri,
+            },
+        )
+        self.metrics.increment("build.published")
+        self.bus.mark_completed(delivery_id)
+        return build
+
+    def _handle_job_failure(self, build: BuildRecord, event, exc: BuilderExecutionError) -> None:
+        attempt_number = int(event.payload.get("attempt", max(1, event.attempts)))
+        attempt = self.repository.get_build_attempt(build.build_id, attempt_number)
+        if attempt is None:
+            attempt = BuildAttemptRecord(build_id=build.build_id, attempt=attempt_number)
+        job = self.repository.get_build_job(build.build_id, attempt=attempt_number)
+        if job is None:
+            job = BuildJobRecord(build_id=build.build_id, attempt=attempt_number)
+        now = datetime.now(UTC)
+        build = self.runner.finalize_failure(build, exc)
+        build.retry_count = max(build.retry_count, max(0, attempt_number - 1))
+        build.build_log_uri = self.runner.build_log_uri(build.build_id)
+        build.build_duration_seconds = max((now - attempt.started_at).total_seconds(), 0.001)
+        build.updated_at = now
+        self.repository.save_build(build)
+        self.repository.add_build_event(
+            BuildEventRecord(build_id=build.build_id, stage="failed", message=build.failure_reason or str(exc))
+        )
+        self.repository.add_build_log(
+            BuildLogRecord(
+                build_id=build.build_id,
+                attempt=attempt_number,
+                stage="failed",
+                message=build.failure_reason or str(exc),
+            )
+        )
+        attempt.status = "failed"
+        attempt.failure_class = build.failure_class
+        attempt.last_operation = exc.operation
+        if not exc.retryable or build.retry_count >= 2:
+            attempt.finished_at = now
+        self.repository.save_build_attempt(attempt)
+        job.status = "failed"
+        job.current_stage = "failed"
+        job.failure_class = build.failure_class
+        job.progress_message = build.failure_reason
+        if not exc.retryable or build.retry_count >= 2:
+            job.finished_at = now
+        job.updated_at = now
+        self.repository.save_build_job(job)
+        self.bus.publish(
+            "build.job.failed",
+            {
+                "build_id": build.build_id,
+                "attempt": attempt_number,
+                "reason": build.failure_reason,
+                "failure_class": build.failure_class,
+            },
+        )
+        self.bus.publish(
+            "build.failed",
+            {
+                "build_id": build.build_id,
+                "image": build.image,
+                "reason": build.failure_reason,
+                "failure_class": build.failure_class,
+            },
+        )
+        self.metrics.increment("build.failed")
+        if exc.retryable and build.retry_count < 2:
+            build.status = job.current_stage = event.payload.get("stage", job.current_stage or "staging")
+            build.failure_reason = None
+            build.failure_class = None
+            build.updated_at = now
+            job.status = "queued"
+            job.current_stage = str(event.payload.get("stage", "staging"))
+            job.failure_class = None
+            job.finished_at = None
+            job.updated_at = now
+            self.repository.save_build(build)
+            self.repository.save_build_job(job)
+            self.bus.mark_failed(
+                event.delivery_id,
+                str(exc),
+                retryable=True,
+                retry_after_seconds=1.0,
+            )
+            return
+        build.retry_exhausted = True
+        self.repository.save_build(build)
+        self.bus.mark_failed(event.delivery_id, build.failure_reason or str(exc))
 
     @staticmethod
     def _validate_context_uri(context_uri: str) -> None:
