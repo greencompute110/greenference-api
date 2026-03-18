@@ -163,6 +163,26 @@ class BuilderService:
             job_id=latest_job.job_id,
         )
 
+    def latest_build_job_recovery_summary(self, build_id: str) -> dict[str, object]:
+        job = self.repository.get_build_job(build_id)
+        if job is None:
+            raise KeyError(f"build job not found: {build_id}")
+        resumed_from_state = bool(job.recovery_count or str(job.stage_state.get("recovered", "")).lower() == "true")
+        return {
+            "build_id": build_id,
+            "job_id": job.job_id,
+            "attempt": job.attempt,
+            "status": job.status,
+            "current_stage": job.current_stage,
+            "last_completed_stage": job.last_completed_stage,
+            "recovery_count": job.recovery_count,
+            "last_recovered_at": job.last_recovered_at,
+            "resumed_from_persisted_state": resumed_from_state,
+            "resumed_stage": job.current_stage if resumed_from_state else None,
+            "reused_stage_outputs": bool(job.stage_state),
+            "stage_state": job.stage_state,
+        }
+
     def recovery_status(self) -> dict[str, object | None]:
         return dict(self._recovery_state)
 
@@ -412,53 +432,57 @@ class BuilderService:
         return build
 
     def process_pending_events(self, limit: int = 10) -> list[BuildRecord]:
-        events = self.bus.claim_pending("builder-worker", ["build.accepted", "build.job.progress"], limit=limit)
         processed: list[BuildRecord] = []
-
-        for event in events:
-            build = self.repository.get_build(str(event.payload["build_id"]))
-            if build is None:
-                self.bus.mark_failed(event.delivery_id, "build not found")
-                self.metrics.increment("build.failed")
-                continue
-            try:
-                if build.status == "cancelled":
-                    self.bus.mark_completed(event.delivery_id)
+        remaining = limit
+        while remaining > 0:
+            events = self.bus.claim_pending("builder-worker", ["build.accepted", "build.job.progress"], limit=remaining)
+            if not events:
+                break
+            remaining -= len(events)
+            for event in events:
+                build = self.repository.get_build(str(event.payload["build_id"]))
+                if build is None:
+                    self.bus.mark_failed(event.delivery_id, "build not found")
+                    self.metrics.increment("build.failed")
                     continue
-                if build.status == "published":
-                    self.bus.mark_completed(event.delivery_id)
-                    continue
-                if event.subject == "build.accepted":
-                    self._initialize_or_resume_job(build, event)
-                    self.bus.mark_completed(event.delivery_id)
-                    continue
-                processed_build = self._advance_job(build, event)
-                if processed_build is not None:
-                    processed.append(processed_build)
-            except BuilderExecutionError as exc:
-                self._handle_job_failure(build, event, exc)
-            except ValueError as exc:
-                self._handle_job_failure(
-                    build,
-                    event,
-                    BuilderExecutionError(
-                        str(exc),
-                        operation="validate_context",
-                        failure_class="build_validation_failure",
-                        retryable=False,
-                    ),
-                )
-            except Exception as exc:  # noqa: BLE001
-                self._handle_job_failure(
-                    build,
-                    event,
-                    BuilderExecutionError(
-                        str(exc),
-                        operation=build.last_operation or "unexpected",
-                        failure_class="builder_runtime_error",
-                        retryable=False,
-                    ),
-                )
+                try:
+                    if build.status == "cancelled":
+                        self.bus.mark_completed(event.delivery_id)
+                        continue
+                    if build.status == "published":
+                        self.bus.mark_completed(event.delivery_id)
+                        continue
+                    if event.subject == "build.accepted":
+                        self._initialize_or_resume_job(build, event)
+                        self.bus.mark_completed(event.delivery_id)
+                        continue
+                    processed_build = self._advance_job(build, event)
+                    if processed_build is not None:
+                        processed.append(processed_build)
+                except BuilderExecutionError as exc:
+                    self._handle_job_failure(build, event, exc)
+                except ValueError as exc:
+                    self._handle_job_failure(
+                        build,
+                        event,
+                        BuilderExecutionError(
+                            str(exc),
+                            operation="validate_context",
+                            failure_class="build_validation_failure",
+                            retryable=False,
+                        ),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._handle_job_failure(
+                        build,
+                        event,
+                        BuilderExecutionError(
+                            str(exc),
+                            operation=build.last_operation or "unexpected",
+                            failure_class="builder_runtime_error",
+                            retryable=False,
+                        ),
+                    )
         pending_count = len(
             self.bus.list_deliveries(
                 consumer="builder-worker",
@@ -638,7 +662,7 @@ class BuilderService:
         job: BuildJobRecord,
         result: BuildStageResult,
         delivery_id: str,
-    ) -> BuildRecord:
+    ) -> BuildRecord | None:
         now = datetime.now(UTC)
         if result.context is not None:
             self.repository.save_build_context(result.context)
@@ -703,12 +727,12 @@ class BuilderService:
                 },
             )
             self.bus.mark_completed(delivery_id)
-            return build
+            return None
 
         if result.published_image is None:
             raise ValueError("terminal build stage missing published image")
         build = self.runner.finalize_success(build, result.published_image)
-        build.build_duration_seconds = max((now - attempt.started_at).total_seconds(), 0.001)
+        build.build_duration_seconds = max((now - self._ensure_utc(attempt.started_at)).total_seconds(), 0.001)
         build.retry_count = max(build.retry_count, max(0, attempt.attempt - 1))
         self.repository.save_build(build)
         attempt.status = "published"
@@ -766,7 +790,7 @@ class BuilderService:
         build = self.runner.finalize_failure(build, exc)
         build.retry_count = max(build.retry_count, max(0, attempt_number - 1))
         build.build_log_uri = self.runner.build_log_uri(build.build_id)
-        build.build_duration_seconds = max((now - attempt.started_at).total_seconds(), 0.001)
+        build.build_duration_seconds = max((now - self._ensure_utc(attempt.started_at)).total_seconds(), 0.001)
         build.updated_at = now
         self.repository.save_build(build)
         self.repository.add_build_event(
@@ -886,6 +910,12 @@ class BuilderService:
     @staticmethod
     def _context_digest(build_id: str, context_uri: str, dockerfile_path: str) -> str:
         return f"sha256:{hashlib.sha256(f'{build_id}:{context_uri}:{dockerfile_path}'.encode()).hexdigest()}"
+
+    @staticmethod
+    def _ensure_utc(timestamp: datetime) -> datetime:
+        if timestamp.tzinfo is None:
+            return timestamp.replace(tzinfo=UTC)
+        return timestamp
 
     def _record_job_checkpoint(
         self,

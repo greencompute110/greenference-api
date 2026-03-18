@@ -18,6 +18,14 @@ class InferenceTimeoutError(InferenceUpstreamError):
     pass
 
 
+class InferenceConnectionError(InferenceUpstreamError):
+    pass
+
+
+class InferenceBadResponseError(InferenceUpstreamError):
+    pass
+
+
 class HttpInferenceClient:
     def __init__(
         self,
@@ -75,10 +83,19 @@ class HttpInferenceClient:
                 raise InferenceTimeoutError(
                     f"upstream timed out for deployment={deployment.deployment_id}"
                 ) from exc
+            if isinstance(exc, URLError):
+                raise InferenceConnectionError(
+                    f"upstream connection failed for deployment={deployment.deployment_id}"
+                ) from exc
             raise InferenceUpstreamError(
                 f"upstream invocation failed for deployment={deployment.deployment_id}"
             ) from exc
-        return ChatCompletionResponse(**body)
+        try:
+            return ChatCompletionResponse(**body)
+        except Exception as exc:  # noqa: BLE001
+            raise InferenceBadResponseError(
+                f"upstream returned invalid response for deployment={deployment.deployment_id}"
+            ) from exc
 
     def stream_chat_completion(
         self,
@@ -114,6 +131,10 @@ class HttpInferenceClient:
             if isinstance(exc, URLError) and isinstance(exc.reason, TimeoutError | socket.timeout):
                 raise InferenceTimeoutError(
                     f"upstream timed out for deployment={deployment.deployment_id}"
+                ) from exc
+            if isinstance(exc, URLError):
+                raise InferenceConnectionError(
+                    f"upstream connection failed for deployment={deployment.deployment_id}"
                 ) from exc
             raise InferenceUpstreamError(
                 f"upstream invocation failed for deployment={deployment.deployment_id}"

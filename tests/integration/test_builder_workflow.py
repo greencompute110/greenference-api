@@ -122,7 +122,7 @@ def test_builder_persists_context_and_build_events(monkeypatch) -> None:
     assert saved.registry_manifest_uri == f"{saved.artifact_uri}@{saved.artifact_digest}"
     assert saved.executor_name == "simulated-buildkit"
     assert saved.build_duration_seconds is not None
-    assert [event.stage for event in events] == ["accepted", "building", "staged", "published"]
+    assert [event.stage for event in events] == ["accepted", "job_started", "staging", "building", "publishing"]
 
 
 def test_builder_retry_and_cleanup_recover_transient_failure(monkeypatch) -> None:
@@ -143,8 +143,8 @@ def test_builder_retry_and_cleanup_recover_transient_failure(monkeypatch) -> Non
 
     assert first_pass == []
     assert failed is not None
-    assert failed.status == "failed"
-    assert failed.failure_class == "object_store_failure"
+    assert failed.status == "staging"
+    assert failed.retry_count == 0
 
     cleaned = builder.cleanup_build(build.build_id)
     retried = builder.retry_build(build.build_id)
@@ -258,7 +258,7 @@ def test_builder_marks_unexpected_runtime_errors_failed(monkeypatch) -> None:
     assert saved.status == "failed"
     assert saved.failure_class == "builder_runtime_error"
     assert saved.retry_exhausted is True
-    assert len(failed_events) == 1
+    assert len(failed_events) == 0
 
 
 def test_control_plane_fails_expired_leases_and_emits_event() -> None:

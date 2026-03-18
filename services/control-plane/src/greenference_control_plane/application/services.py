@@ -39,6 +39,7 @@ class ControlPlaneService:
             session_factory=self.repository.session_factory,
         )
         runtime_settings = load_runtime_settings("greenference-control-plane")
+        self.runtime_settings = runtime_settings
         self.bus = bus or create_subject_bus(
             engine=self.workflow_repository.engine,
             session_factory=self.workflow_repository.session_factory,
@@ -49,6 +50,12 @@ class ControlPlaneService:
         self.placement_policy = PlacementPolicy()
         self.usage_aggregator = UsageAggregator()
         self.metrics = get_metrics_store("greenference-control-plane")
+        self._recovery_state: dict[str, object | None] = {
+            "last_recovery_at": None,
+            "last_recovery_error": None,
+            "requeued_deliveries": 0,
+            "resumed_subjects": {},
+        }
 
     def register_miner(self, registration: MinerRegistration) -> MinerRegistration:
         return self.repository.upsert_miner(registration)
@@ -258,6 +265,28 @@ class ControlPlaneService:
         self.metrics.increment("usage.queued")
         return record
 
+    def recovery_status(self) -> dict[str, object | None]:
+        return dict(self._recovery_state)
+
+    def recover_inflight_events(self) -> dict[str, object | None]:
+        subjects = ["deployment.requested", "usage.recorded", "invocation.recorded"]
+        stale_after_seconds = max(self.runtime_settings.worker_poll_interval_seconds * 4, 2.0)
+        requeued = self.bus.requeue_stale_processing(
+            "control-plane-worker",
+            subjects,
+            stale_after_seconds=stale_after_seconds,
+        )
+        resumed_subjects: dict[str, int] = {}
+        for delivery in requeued:
+            resumed_subjects[delivery.subject] = resumed_subjects.get(delivery.subject, 0) + 1
+        self._recovery_state = {
+            "last_recovery_at": datetime.now(UTC),
+            "last_recovery_error": None,
+            "requeued_deliveries": len(requeued),
+            "resumed_subjects": resumed_subjects,
+        }
+        return self.recovery_status()
+
     def usage_summary(self) -> dict[str, dict[str, float]]:
         return self.usage_aggregator.aggregate(self.repository.list_usage_records())
 
@@ -391,6 +420,54 @@ class ControlPlaneService:
                 )
         return exclusions
 
+    def routing_eligibility_report(
+        self,
+        workload_id: str | None = None,
+        now: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        observed_at = now or datetime.now(UTC)
+        reports: list[dict[str, Any]] = []
+        for deployment in self.repository.list_deployments():
+            if workload_id is not None and deployment.workload_id != workload_id:
+                continue
+            reasons: list[str] = []
+            node = self._find_node(deployment.node_id) if deployment.node_id else None
+            miner = self.repository.get_miner(deployment.hotkey or "") if deployment.hotkey else None
+            if deployment.state != DeploymentState.READY:
+                reasons.append(f"deployment_state:{deployment.state.value}")
+            if deployment.endpoint is None:
+                reasons.append("missing_endpoint")
+            if deployment.hotkey is None:
+                reasons.append("missing_hotkey")
+            if miner is not None and miner.drained:
+                reasons.append("miner_drained")
+            heartbeat = self.repository.get_heartbeat(deployment.hotkey or "") if deployment.hotkey else None
+            if heartbeat is not None and not heartbeat.healthy:
+                reasons.append("miner_unhealthy")
+            if node is None and deployment.node_id is not None:
+                reasons.append("node_missing")
+            if node is not None and self._is_node_stale(node, now=observed_at):
+                reasons.append("node_stale")
+            if node is not None and self._is_server_for_node_stale(node, now=observed_at):
+                reasons.append("server_stale")
+            if deployment.node_id and self._is_node_in_cooldown(deployment.node_id, now=observed_at):
+                reasons.append("placement_cooldown")
+            reports.append(
+                {
+                    "deployment_id": deployment.deployment_id,
+                    "workload_id": deployment.workload_id,
+                    "hotkey": deployment.hotkey,
+                    "node_id": deployment.node_id,
+                    "endpoint": deployment.endpoint,
+                    "state": deployment.state.value,
+                    "eligible": len(reasons) == 0,
+                    "reasons": reasons,
+                    "last_error": deployment.last_error,
+                    "failure_class": deployment.failure_class,
+                }
+            )
+        return reports
+
     def deployment_failure_report(self) -> list[dict[str, Any]]:
         return [
             deployment.model_dump(mode="json")
@@ -419,10 +496,16 @@ class ControlPlaneService:
             "workers": {
                 "queue_depth": delivery_status_counts["pending"],
                 "delivery_status_counts": delivery_status_counts,
+                "recovery": self.recovery_status(),
             },
             "unhealthy_miners": unhealthy_miners,
             "drained_miners": [item for item in self.miner_health_report() if item["drained"]],
+            "stale_inventory": self.miner_drift_report(),
+            "placement_exclusions": self.placement_exclusion_report(),
+            "routing_eligibility": self.routing_eligibility_report(),
             "stuck_deployments": stuck_deployments,
+            "deployment_failures": self.deployment_failure_report(),
+            "failed_invocations": self.invocation_failure_report(limit=20),
             "failed_builds": failed_builds[-20:],
         }
 

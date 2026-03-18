@@ -266,6 +266,16 @@ def debug_placement_exclusions(
     return service.placement_exclusion_report()
 
 
+@router.get("/platform/v1/debug/routing-eligibility")
+def debug_routing_eligibility(
+    workload_id: str | None = None,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_admin_api_key(authorization, x_api_key)
+    return service.routing_eligibility_report(workload_id=workload_id)
+
+
 @router.get("/platform/v1/debug/deployment-failures")
 def debug_deployment_failures(
     authorization: str | None = Header(default=None),
@@ -389,6 +399,7 @@ def debug_workers(
                 "oldest_available_at": (
                     min((item.available_at for item in deliveries), default=None)
                 ),
+                "recovery": service.recovery_status() if consumer == "control-plane-worker" else None,
             }
         )
     return reports

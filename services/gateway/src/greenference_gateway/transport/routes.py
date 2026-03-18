@@ -11,7 +11,12 @@ from greenference_protocol import (
 )
 from greenference_gateway.application.services import service
 from greenference_gateway.domain.routing import NoReadyDeploymentError
-from greenference_gateway.infrastructure.inference_client import InferenceTimeoutError, InferenceUpstreamError
+from greenference_gateway.infrastructure.inference_client import (
+    InferenceBadResponseError,
+    InferenceConnectionError,
+    InferenceTimeoutError,
+    InferenceUpstreamError,
+)
 from greenference_gateway.transport.security import enforce_rate_limit, metrics, require_api_key
 
 router = APIRouter()
@@ -193,6 +198,19 @@ def recover_build_jobs(
     return service.recover_build_jobs()
 
 
+@router.get("/platform/builds/{build_id}/recovery-summary")
+def build_recovery_summary(
+    build_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    try:
+        return service.build_recovery_summary(build_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/platform/builds/{build_id}/attempts/{attempt}")
 def get_build_attempt(
     build_id: str,
@@ -343,6 +361,12 @@ def chat_completions(
     except InferenceTimeoutError as exc:
         metrics.increment("invoke.failure.timeout")
         raise HTTPException(status_code=504, detail=str(exc)) from exc
+    except InferenceConnectionError as exc:
+        metrics.increment("invoke.failure.connection")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except InferenceBadResponseError as exc:
+        metrics.increment("invoke.failure.bad_response")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except InferenceUpstreamError as exc:
         metrics.increment("invoke.failure.upstream")
         raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -15,6 +15,9 @@ _worker_state: dict[str, object | None] = {
     "last_successful_iteration": None,
     "last_failed_iteration": None,
     "last_error": None,
+    "last_recovery_at": None,
+    "last_recovery_error": None,
+    "last_recovery_requeued_deliveries": 0,
 }
 metrics = get_metrics_store("greenference-control-plane")
 
@@ -40,6 +43,13 @@ async def _control_plane_worker_loop() -> None:
 async def lifespan(_: FastAPI):
     task = None
     if settings.enable_background_workers:
+        try:
+            recovery = service.recover_inflight_events()
+            _worker_state["last_recovery_at"] = recovery["last_recovery_at"]
+            _worker_state["last_recovery_error"] = None
+            _worker_state["last_recovery_requeued_deliveries"] = recovery["requeued_deliveries"]
+        except Exception as exc:  # noqa: BLE001
+            _worker_state["last_recovery_error"] = str(exc)
         task = asyncio.create_task(_control_plane_worker_loop())
     try:
         yield
@@ -81,6 +91,9 @@ def readiness() -> dict[str, object]:
         payload["worker_last_successful_iteration"] = _worker_state["last_successful_iteration"]
         payload["worker_last_failed_iteration"] = _worker_state["last_failed_iteration"]
         payload["worker_last_error"] = _worker_state["last_error"]
+        payload["worker_last_recovery_at"] = _worker_state["last_recovery_at"]
+        payload["worker_last_recovery_error"] = _worker_state["last_recovery_error"]
+        payload["worker_last_recovery_requeued_deliveries"] = _worker_state["last_recovery_requeued_deliveries"]
     return payload
 
 

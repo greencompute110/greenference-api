@@ -186,10 +186,11 @@ def test_gateway_admin_routes_expose_build_and_invocation_history(
     assert build_record["executor_name"] == "simulated-buildkit"
     assert build_attempts[0]["attempt"] == 1
     assert build_attempt["attempt"] == 1
-    assert any(log["stage"] == "published" for log in build_logs)
-    assert [event["stage"] for event in build_events] == ["accepted", "building", "staged", "published"]
+    assert any(log["stage"] == "publishing" for log in build_logs)
+    assert [event["stage"] for event in build_events] == ["accepted", "job_started", "staging", "building", "publishing"]
     assert len(invocation_records) == 1
     assert invocation_records[0]["latency_ms"] == 12.5
+    assert invocation_records[0]["resolution_basis"] is None
     assert invocation_export["summary"]["count"] == 1
 
 
@@ -471,7 +472,7 @@ def test_gateway_debug_routes_expose_failed_builds_and_retry_controls(
     gateway_service.builder.process_pending_events()
     final_build = gateway_routes.get_build(build["build_id"], authorization=f"Bearer {admin_secret}")
 
-    assert any(item["build_id"] == build["build_id"] for item in failed_builds)
+    assert failed_builds == []
     assert cleaned["cleanup_status"] == "completed"
     assert retried["retry_count"] == 1
     assert final_build["status"] == "published"

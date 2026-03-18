@@ -35,7 +35,12 @@ from greenference_protocol import (
     WorkloadSpec,
 )
 from greenference_gateway.domain.routing import NoReadyDeploymentError
-from greenference_gateway.infrastructure.inference_client import HttpInferenceClient
+from greenference_gateway.infrastructure.inference_client import (
+    HttpInferenceClient,
+    InferenceBadResponseError,
+    InferenceConnectionError,
+    InferenceTimeoutError,
+)
 from greenference_gateway.infrastructure.repository import GatewayRepository
 from greenference_gateway.transport.security import metrics as gateway_metrics
 
@@ -113,6 +118,12 @@ class GatewayService:
     def build_recovery_status(self) -> dict[str, object | None]:
         return self.builder.recovery_status()
 
+    def build_recovery_summary(self, build_id: str) -> dict[str, object]:
+        build = self.builder.get_build(build_id)
+        if build is None:
+            raise KeyError(f"build not found: {build_id}")
+        return self.builder.latest_build_job_recovery_summary(build_id)
+
     def build_attempts(self, build_id: str) -> list[dict]:
         return self.builder.build_attempts(build_id)
 
@@ -165,33 +176,32 @@ class GatewayService:
     ):
         request_id = str(uuid4())
         started = perf_counter()
-        deployment = self._resolve_deployment_for_request(request, routed_host=routed_host)
+        deployment, routing = self._select_deployment_for_request(request, routed_host=routed_host)
         try:
-            response = self.inference_client.invoke_chat_completion(
-                deployment,
-                request,
-                request_id=request_id,
-            )
+            response = self._invoke_upstream_response(deployment, request, request_id=request_id)
         except RuntimeError as exc:
-            self.control_plane.record_deployment_health_failure(deployment.deployment_id, str(exc))
+            self._handle_upstream_failure(deployment, routing, exc)
             self._record_invocation(
                 deployment,
                 request,
+                routing=routing,
                 request_id=request_id,
                 api_key_id=api_key_id,
                 stream=False,
                 started=started,
                 status="failed",
-                error_class=exc.__class__.__name__,
+                error_class=self._classify_inference_error(exc),
             )
             raise
-        self.control_plane.clear_deployment_health_failures(deployment.deployment_id)
+        self._handle_upstream_success(deployment, routing)
         self._record_usage(deployment, stream=False, stream_chunk_count=0)
-        self.metrics.observe("invoke.latency_ms", (perf_counter() - started) * 1000.0)
+        latency_ms = (perf_counter() - started) * 1000.0
+        self.metrics.observe("invoke.latency_ms", latency_ms)
         response.id = request_id
         self._record_invocation(
             deployment,
             request,
+            routing=routing,
             request_id=request_id,
             api_key_id=api_key_id,
             stream=False,
@@ -208,14 +218,10 @@ class GatewayService:
     ) -> Iterator[str]:
         request_id = str(uuid4())
         started = perf_counter()
-        deployment = self._resolve_deployment_for_request(request, routed_host=routed_host)
+        deployment, routing = self._select_deployment_for_request(request, routed_host=routed_host)
         chunk_count = 0
         try:
-            for line in self.inference_client.stream_chat_completion(
-                deployment,
-                request,
-                request_id=request_id,
-            ):
+            for line in self._invoke_upstream_stream(deployment, request, request_id=request_id):
                 stripped = line.strip()
                 if stripped.startswith("data: ") and stripped != "data: [DONE]":
                     payload = loads(stripped[6:])
@@ -224,24 +230,26 @@ class GatewayService:
                         chunk_count += 1
                 yield line
         except RuntimeError as exc:
-            self.control_plane.record_deployment_health_failure(deployment.deployment_id, str(exc))
+            self._handle_upstream_failure(deployment, routing, exc)
             self._record_invocation(
                 deployment,
                 request,
+                routing=routing,
                 request_id=request_id,
                 api_key_id=api_key_id,
                 stream=True,
                 started=started,
                 status="failed",
-                error_class=exc.__class__.__name__,
+                error_class=self._classify_inference_error(exc),
             )
             raise
-        self.control_plane.clear_deployment_health_failures(deployment.deployment_id)
+        self._handle_upstream_success(deployment, routing)
         self._record_usage(deployment, stream=True, stream_chunk_count=chunk_count)
         self.metrics.observe("invoke.latency_ms", (perf_counter() - started) * 1000.0)
         self._record_invocation(
             deployment,
             request,
+            routing=routing,
             request_id=request_id,
             api_key_id=api_key_id,
             stream=True,
@@ -277,11 +285,11 @@ class GatewayService:
                 return workload_item, {"matched_by": "name_scan", "host": normalized_host, "model": model}
         raise NoReadyDeploymentError(f"unknown model={model}")
 
-    def _resolve_deployment_for_request(
+    def _select_deployment_for_request(
         self,
         request: ChatCompletionRequest,
         routed_host: str | None = None,
-    ) -> DeploymentRecord:
+    ) -> tuple[DeploymentRecord, dict]:
         workload, routing = self.resolve_workload_reference(request.model, routed_host=routed_host)
         workload_id = workload.workload_id
         candidates = [
@@ -328,7 +336,13 @@ class GatewayService:
                     "created_at": datetime.now(UTC).isoformat(),
                 }
             )
-            return deployment
+            return deployment, {
+                **routing,
+                "workload_id": workload_id,
+                "selected_deployment_id": deployment.deployment_id,
+                "selected_hotkey": deployment.hotkey,
+                "routing_reason": "ready_and_healthy",
+            }
 
         self.repository.record_routing_decision(
             {
@@ -340,6 +354,59 @@ class GatewayService:
             }
         )
         raise NoReadyDeploymentError(f"no healthy deployment available for model={request.model}")
+
+    def _invoke_upstream_response(
+        self,
+        deployment: DeploymentRecord,
+        request: ChatCompletionRequest,
+        *,
+        request_id: str,
+    ):
+        return self.inference_client.invoke_chat_completion(deployment, request, request_id=request_id)
+
+    def _invoke_upstream_stream(
+        self,
+        deployment: DeploymentRecord,
+        request: ChatCompletionRequest,
+        *,
+        request_id: str,
+    ) -> Iterator[str]:
+        return self.inference_client.stream_chat_completion(deployment, request, request_id=request_id)
+
+    def _handle_upstream_success(self, deployment: DeploymentRecord, routing: dict) -> None:
+        self.control_plane.clear_deployment_health_failures(deployment.deployment_id)
+        self.repository.record_routing_decision(
+            {
+                **routing,
+                "deployment_id": deployment.deployment_id,
+                "decision": "completed",
+                "reason": "upstream_succeeded",
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+        )
+
+    def _handle_upstream_failure(self, deployment: DeploymentRecord, routing: dict, exc: RuntimeError) -> None:
+        failure_class = self._classify_inference_error(exc)
+        self.control_plane.record_deployment_health_failure(deployment.deployment_id, str(exc))
+        self.repository.record_routing_decision(
+            {
+                **routing,
+                "deployment_id": deployment.deployment_id,
+                "decision": "failed",
+                "reason": failure_class,
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+        )
+
+    @staticmethod
+    def _classify_inference_error(exc: RuntimeError) -> str:
+        if isinstance(exc, InferenceTimeoutError):
+            return "upstream_timeout"
+        if isinstance(exc, InferenceConnectionError):
+            return "upstream_connection_failure"
+        if isinstance(exc, InferenceBadResponseError):
+            return "upstream_bad_response"
+        return "upstream_failure"
 
     def _record_usage(self, deployment: DeploymentRecord, *, stream: bool, stream_chunk_count: int) -> None:
         self.control_plane.record_usage(
@@ -361,6 +428,7 @@ class GatewayService:
         deployment: DeploymentRecord,
         request: ChatCompletionRequest,
         *,
+        routing: dict,
         request_id: str,
         api_key_id: str | None,
         stream: bool,
@@ -376,6 +444,9 @@ class GatewayService:
                 hotkey=deployment.hotkey or "unknown",
                 model=request.model,
                 api_key_id=api_key_id,
+                routed_host=routing.get("host"),
+                resolution_basis=routing.get("matched_by"),
+                routing_reason=routing.get("routing_reason"),
                 stream=stream,
                 status=status,
                 error_class=error_class,
