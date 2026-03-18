@@ -6,8 +6,11 @@ from greenference_protocol import (
     BuildRequest,
     ChatCompletionRequest,
     DeploymentCreateRequest,
+    UserProfileUpdateRequest,
+    UserSecretCreateRequest,
     UserRegistrationRequest,
     WorkloadCreateRequest,
+    WorkloadShareCreateRequest,
 )
 from greenference_gateway.application.services import service
 from greenference_gateway.domain.routing import NoReadyDeploymentError
@@ -30,6 +33,37 @@ def create_api_key(payload: APIKeyCreateRequest) -> dict:
 @router.post("/platform/register")
 def register_user(payload: UserRegistrationRequest) -> dict:
     return service.register_user(payload).model_dump(mode="json")
+
+
+@router.get("/platform/users/{user_id}")
+def get_user(
+    user_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    api_key = require_api_key(authorization, x_api_key)
+    if not api_key.admin and api_key.user_id != user_id:
+        raise HTTPException(status_code=403, detail="user access denied")
+    user = service.get_user(user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    return user.model_dump(mode="json")
+
+
+@router.patch("/platform/users/{user_id}")
+def update_user(
+    user_id: str,
+    payload: UserProfileUpdateRequest,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    api_key = require_api_key(authorization, x_api_key)
+    if not api_key.admin and api_key.user_id != user_id:
+        raise HTTPException(status_code=403, detail="user access denied")
+    try:
+        return service.update_user_profile(user_id, payload).model_dump(mode="json")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/platform/images")
@@ -299,7 +333,9 @@ def create_workload(
 ) -> dict:
     api_key = require_api_key(authorization, x_api_key)
     enforce_rate_limit("create_workload", api_key.key_id, limit=30, window_seconds=60)
-    return service.create_workload(payload).model_dump(mode="json")
+    if api_key.user_id is None:
+        raise HTTPException(status_code=403, detail="api key must be bound to a user")
+    return service.create_workload(payload, api_key.user_id).model_dump(mode="json")
 
 
 @router.get("/platform/workloads")
@@ -307,8 +343,54 @@ def list_workloads(
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> list[dict]:
-    require_api_key(authorization, x_api_key)
-    return [workload.model_dump(mode="json") for workload in service.list_workloads()]
+    api_key = require_api_key(authorization, x_api_key)
+    return [
+        workload.model_dump(mode="json")
+        for workload in service.list_workloads(user_id=api_key.user_id, admin=api_key.admin)
+    ]
+
+
+@router.post("/platform/workloads/{workload_id}/shares")
+def share_workload(
+    workload_id: str,
+    payload: WorkloadShareCreateRequest,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    api_key = require_api_key(authorization, x_api_key)
+    try:
+        return service.share_workload(
+            workload_id,
+            payload,
+            actor_user_id=api_key.user_id,
+            admin=api_key.admin,
+        ).model_dump(mode="json")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.get("/platform/workloads/{workload_id}/shares")
+def list_workload_shares(
+    workload_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    api_key = require_api_key(authorization, x_api_key)
+    try:
+        return [
+            share.model_dump(mode="json")
+            for share in service.list_workload_shares(
+                workload_id,
+                actor_user_id=api_key.user_id,
+                admin=api_key.admin,
+            )
+        ]
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("/platform/deployments")
@@ -319,7 +401,16 @@ def create_deployment(
 ) -> dict:
     api_key = require_api_key(authorization, x_api_key)
     enforce_rate_limit("create_deployment", api_key.key_id, limit=30, window_seconds=60)
-    return service.create_deployment(payload).model_dump(mode="json")
+    try:
+        return service.create_deployment(
+            payload,
+            user_id=api_key.user_id,
+            admin=api_key.admin,
+        ).model_dump(mode="json")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.get("/platform/deployments")
@@ -327,8 +418,49 @@ def list_deployments(
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> list[dict]:
-    require_api_key(authorization, x_api_key)
-    return [deployment.model_dump(mode="json") for deployment in service.list_deployments()]
+    api_key = require_api_key(authorization, x_api_key)
+    return [
+        deployment.model_dump(mode="json")
+        for deployment in service.list_deployments(user_id=api_key.user_id, admin=api_key.admin)
+    ]
+
+
+@router.post("/platform/secrets")
+def create_secret(
+    payload: UserSecretCreateRequest,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    api_key = require_api_key(authorization, x_api_key)
+    if api_key.user_id is None:
+        raise HTTPException(status_code=403, detail="api key must be bound to a user")
+    return service.create_secret(api_key.user_id, payload).model_dump(mode="json")
+
+
+@router.get("/platform/secrets")
+def list_secrets(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    api_key = require_api_key(authorization, x_api_key)
+    if api_key.user_id is None:
+        raise HTTPException(status_code=403, detail="api key must be bound to a user")
+    return [secret.model_dump(mode="json") for secret in service.list_secrets(api_key.user_id)]
+
+
+@router.delete("/platform/secrets/{secret_id}")
+def delete_secret(
+    secret_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    api_key = require_api_key(authorization, x_api_key)
+    try:
+        return service.delete_secret(secret_id, user_id=api_key.user_id, admin=api_key.admin).model_dump(mode="json")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post("/v1/chat/completions")

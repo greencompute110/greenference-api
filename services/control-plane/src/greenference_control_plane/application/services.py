@@ -111,12 +111,14 @@ class ControlPlaneService:
         return self.repository.find_workload_by_ingress_host(ingress_host)
 
     def create_deployment(self, request: DeploymentCreateRequest | dict) -> DeploymentRecord:
+        owner_user_id = request.get("owner_user_id") if isinstance(request, dict) else None
         payload = request if isinstance(request, DeploymentCreateRequest) else DeploymentCreateRequest(**request)
         workload = self.repository.get_workload(payload.workload_id)
         if workload is None:
             raise KeyError(f"workload not found: {payload.workload_id}")
         deployment = DeploymentRecord(
             workload_id=payload.workload_id,
+            owner_user_id=owner_user_id,
             requested_instances=payload.requested_instances,
         )
         self.repository.create_deployment(deployment)

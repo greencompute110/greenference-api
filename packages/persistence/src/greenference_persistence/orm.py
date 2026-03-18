@@ -33,6 +33,10 @@ class UserORM(Base):
     user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    bio: Mapped[str | None] = mapped_column(Text, nullable=True)
+    website: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    profile_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -103,6 +107,7 @@ class WorkloadORM(Base):
     __tablename__ = "workloads"
 
     workload_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(100))
     image: Mapped[str] = mapped_column(String(512))
     workload_alias: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True, index=True)
@@ -111,6 +116,7 @@ class WorkloadORM(Base):
     security_tier: Mapped[str] = mapped_column(String(32))
     pricing_class: Mapped[str] = mapped_column(String(32))
     requirements: Mapped[dict[str, Any]] = mapped_column(JSON)
+    runtime: Mapped[dict[str, Any]] = mapped_column(JSON)
     public: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -120,6 +126,7 @@ class DeploymentORM(Base):
 
     deployment_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     workload_id: Mapped[str] = mapped_column(String(64), index=True)
+    owner_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     hotkey: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     node_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     state: Mapped[str] = mapped_column(String(32), index=True)
@@ -213,6 +220,28 @@ class InvocationRecordORM(Base):
     error_class: Mapped[str | None] = mapped_column(String(128), nullable=True)
     latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
     message_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UserSecretORM(Base):
+    __tablename__ = "user_secrets"
+
+    secret_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    value: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WorkloadShareORM(Base):
+    __tablename__ = "workload_shares"
+
+    share_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workload_id: Mapped[str] = mapped_column(String(64), index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    shared_with_user_id: Mapped[str] = mapped_column(String(64), index=True)
+    permission: Mapped[str] = mapped_column(String(32), default="invoke")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

@@ -165,6 +165,7 @@ class ControlPlaneRepository:
     def upsert_workload(self, workload: WorkloadSpec) -> WorkloadSpec:
         with session_scope(self.session_factory) as session:
             row = session.get(WorkloadORM, workload.workload_id) or WorkloadORM(workload_id=workload.workload_id)
+            row.owner_user_id = workload.owner_user_id
             row.name = workload.name
             row.image = workload.image
             row.workload_alias = workload.workload_alias
@@ -173,6 +174,7 @@ class ControlPlaneRepository:
             row.security_tier = workload.security_tier.value
             row.pricing_class = workload.pricing_class
             row.requirements = workload.requirements.model_dump(mode="json")
+            row.runtime = workload.runtime.model_dump(mode="json")
             row.public = workload.public
             row.created_at = workload.created_at
             session.add(row)
@@ -208,6 +210,7 @@ class ControlPlaneRepository:
             row = DeploymentORM(
                 deployment_id=deployment.deployment_id,
                 workload_id=deployment.workload_id,
+                owner_user_id=deployment.owner_user_id,
                 hotkey=deployment.hotkey,
                 node_id=deployment.node_id,
                 state=deployment.state.value,
@@ -236,6 +239,7 @@ class ControlPlaneRepository:
             row = session.get(DeploymentORM, deployment.deployment_id)
             if row is None:
                 row = DeploymentORM(deployment_id=deployment.deployment_id, workload_id=deployment.workload_id)
+            row.owner_user_id = deployment.owner_user_id
             row.hotkey = deployment.hotkey
             row.node_id = deployment.node_id
             row.state = deployment.state.value
@@ -606,6 +610,7 @@ class ControlPlaneRepository:
     def _to_workload(row: WorkloadORM) -> WorkloadSpec:
         return WorkloadSpec(
             workload_id=row.workload_id,
+            owner_user_id=row.owner_user_id,
             name=row.name,
             image=row.image,
             workload_alias=row.workload_alias,
@@ -614,6 +619,7 @@ class ControlPlaneRepository:
             security_tier=row.security_tier,
             pricing_class=row.pricing_class,
             requirements=row.requirements,
+            runtime=row.runtime,
             public=row.public,
             created_at=row.created_at,
         )
@@ -623,6 +629,7 @@ class ControlPlaneRepository:
         return DeploymentRecord(
             deployment_id=row.deployment_id,
             workload_id=row.workload_id,
+            owner_user_id=row.owner_user_id,
             hotkey=row.hotkey,
             node_id=row.node_id,
             state=row.state,

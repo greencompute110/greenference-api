@@ -135,6 +135,7 @@ Miner-runtime mode verifies:
 - miner runtime records exist for the routed deployment
 - staged artifact paths are created on the miner
 - process-backed runtimes expose a local runtime URL and process id when the environment allows local socket binds
+- runtime summaries expose mode and backend breakdowns
 - runtime summary and runtime detail endpoints reflect the ready backend
 - miner deployment health reflects backend health
 - both one-shot and streamed inference go through a ready runtime

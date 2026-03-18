@@ -29,9 +29,14 @@ from greenference_protocol import (
     DeploymentRecord,
     InvocationRecord,
     UserRecord,
+    UserProfileUpdateRequest,
+    UserSecretCreateRequest,
+    UserSecretRecord,
     UserRegistrationRequest,
     UsageRecord,
     WorkloadCreateRequest,
+    WorkloadShareCreateRequest,
+    WorkloadShareRecord,
     WorkloadSpec,
 )
 from greenference_gateway.domain.routing import NoReadyDeploymentError
@@ -61,6 +66,24 @@ class GatewayService:
 
     def register_user(self, request: UserRegistrationRequest) -> UserRecord:
         user = UserRecord(username=request.username, email=request.email)
+        return self.repository.save_user(user)
+
+    def get_user(self, user_id: str) -> UserRecord | None:
+        return self.repository.get_user(user_id)
+
+    def update_user_profile(self, user_id: str, request: UserProfileUpdateRequest) -> UserRecord:
+        user = self.repository.get_user(user_id)
+        if user is None:
+            raise KeyError(f"user not found: {user_id}")
+        if request.email is not None:
+            user.email = request.email
+        if request.display_name is not None:
+            user.display_name = request.display_name
+        if request.bio is not None:
+            user.bio = request.bio
+        if request.website is not None:
+            user.website = request.website
+        user.metadata = request.metadata
         return self.repository.save_user(user)
 
     def create_api_key(self, request: APIKeyCreateRequest) -> APIKeyRecord:
@@ -142,19 +165,108 @@ class GatewayService:
     def list_failed_builds(self) -> list[BuildRecord]:
         return [build for build in self.builder.list_builds() if build.status == "failed"]
 
-    def create_workload(self, request: WorkloadCreateRequest) -> WorkloadSpec:
-        workload = WorkloadSpec(**request.model_dump())
+    def create_workload(self, request: WorkloadCreateRequest, owner_user_id: str | None = None) -> WorkloadSpec:
+        workload = WorkloadSpec(**request.model_dump(), owner_user_id=owner_user_id)
         return self.control_plane.upsert_workload(workload)
 
-    def list_workloads(self) -> list[WorkloadSpec]:
-        return self.control_plane.list_workloads()
+    def list_workloads(self, user_id: str | None = None, *, admin: bool = False) -> list[WorkloadSpec]:
+        workloads = self.control_plane.list_workloads()
+        if admin:
+            return workloads
+        shared_ids = set()
+        if user_id is not None:
+            shared_ids = {share.workload_id for share in self.repository.list_shared_workloads_for_user(user_id)}
+        return [
+            workload
+            for workload in workloads
+            if workload.public or workload.owner_user_id == user_id or workload.workload_id in shared_ids
+        ]
 
-    def create_deployment(self, request: DeploymentCreateRequest | dict) -> DeploymentRecord:
+    def create_deployment(
+        self,
+        request: DeploymentCreateRequest | dict,
+        *,
+        user_id: str | None = None,
+        admin: bool = False,
+    ) -> DeploymentRecord:
         payload = request if isinstance(request, DeploymentCreateRequest) else DeploymentCreateRequest(**request)
-        return self.control_plane.create_deployment(payload)
+        workload = self.control_plane.repository.get_workload(payload.workload_id)
+        if workload is None:
+            raise KeyError(f"workload not found: {payload.workload_id}")
+        if not admin and not self._user_can_access_workload(workload, user_id):
+            raise PermissionError(f"workload access denied: {payload.workload_id}")
+        return self.control_plane.create_deployment(
+            {
+                "workload_id": payload.workload_id,
+                "requested_instances": payload.requested_instances,
+                "owner_user_id": user_id,
+            }
+        )
 
-    def list_deployments(self) -> list[DeploymentRecord]:
-        return self.control_plane.list_deployments()
+    def list_deployments(self, user_id: str | None = None, *, admin: bool = False) -> list[DeploymentRecord]:
+        deployments = self.control_plane.list_deployments()
+        if admin:
+            return deployments
+        return [
+            deployment
+            for deployment in deployments
+            if deployment.owner_user_id == user_id or (deployment.owner_user_id is None and user_id is None)
+        ]
+
+    def create_secret(self, user_id: str, request: UserSecretCreateRequest) -> UserSecretRecord:
+        secret = UserSecretRecord(user_id=user_id, name=request.name, value=request.value)
+        return self.repository.save_secret(secret)
+
+    def list_secrets(self, user_id: str) -> list[UserSecretRecord]:
+        return self.repository.list_secrets(user_id)
+
+    def delete_secret(self, secret_id: str, *, user_id: str | None, admin: bool = False) -> UserSecretRecord:
+        secret = self.repository.get_secret(secret_id)
+        if secret is None:
+            raise KeyError(f"secret not found: {secret_id}")
+        if not admin and secret.user_id != user_id:
+            raise PermissionError(f"secret access denied: {secret_id}")
+        deleted = self.repository.delete_secret(secret_id)
+        if deleted is None:
+            raise KeyError(f"secret not found: {secret_id}")
+        return deleted
+
+    def share_workload(
+        self,
+        workload_id: str,
+        request: WorkloadShareCreateRequest,
+        *,
+        actor_user_id: str | None,
+        admin: bool = False,
+    ) -> WorkloadShareRecord:
+        workload = self.control_plane.repository.get_workload(workload_id)
+        if workload is None:
+            raise KeyError(f"workload not found: {workload_id}")
+        if not admin and workload.owner_user_id != actor_user_id:
+            raise PermissionError(f"workload share denied: {workload_id}")
+        if self.repository.get_user(request.shared_with_user_id) is None:
+            raise KeyError(f"user not found: {request.shared_with_user_id}")
+        share = WorkloadShareRecord(
+            workload_id=workload_id,
+            owner_user_id=workload.owner_user_id or "",
+            shared_with_user_id=request.shared_with_user_id,
+            permission=request.permission,
+        )
+        return self.repository.save_workload_share(share)
+
+    def list_workload_shares(
+        self,
+        workload_id: str,
+        *,
+        actor_user_id: str | None,
+        admin: bool = False,
+    ) -> list[WorkloadShareRecord]:
+        workload = self.control_plane.repository.get_workload(workload_id)
+        if workload is None:
+            raise KeyError(f"workload not found: {workload_id}")
+        if not admin and workload.owner_user_id != actor_user_id:
+            raise PermissionError(f"workload share denied: {workload_id}")
+        return self.repository.list_workload_shares(workload_id)
 
     def list_invocations(self, limit: int | None = None) -> list[InvocationRecord]:
         return self.control_plane.list_invocations(limit=limit)
@@ -465,6 +577,18 @@ class GatewayService:
             return None
         parsed = urlsplit(f"//{stripped}")
         return parsed.hostname or stripped
+
+    def _user_can_access_workload(self, workload: WorkloadSpec, user_id: str | None) -> bool:
+        if workload.public:
+            return True
+        if workload.owner_user_id is None and user_id is None:
+            return True
+        if user_id is not None and workload.owner_user_id == user_id:
+            return True
+        if user_id is None:
+            return False
+        shares = self.repository.list_workload_shares(workload.workload_id)
+        return any(share.shared_with_user_id == user_id for share in shares)
 
 
 service = GatewayService()
