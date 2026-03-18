@@ -159,6 +159,21 @@ def get_build_logs(
     return [log.model_dump(mode="json") for log in service.list_build_logs(build_id)]
 
 
+@router.get("/platform/builds/{build_id}/logs/stream")
+def stream_build_logs(
+    build_id: str,
+    follow: bool = False,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> StreamingResponse:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return StreamingResponse(
+        service.stream_build_logs(build_id, follow=follow),
+        media_type="text/event-stream",
+        headers={"cache-control": "no-cache"},
+    )
+
+
 @router.post("/platform/builds/{build_id}/retry")
 def retry_build(
     build_id: str,

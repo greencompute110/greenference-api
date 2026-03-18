@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import time
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
@@ -13,6 +16,8 @@ from greenference_persistence import (
 )
 from greenference_protocol import BuildAttemptRecord, BuildContextRecord, BuildEventRecord, BuildJobRecord, BuildLogRecord, BuildRecord, BuildRequest
 from greenference_builder.infrastructure.execution import (
+    AdapterBackedBuildRunner,
+    BuildRunner,
     BuilderExecutionError,
     ObjectStoreAdapter,
     RegistryAdapter,
@@ -29,6 +34,7 @@ class BuilderService:
         bus: SubjectBus | None = None,
         object_store: ObjectStoreAdapter | None = None,
         registry: RegistryAdapter | None = None,
+        runner: BuildRunner | None = None,
     ) -> None:
         self.repository = repository or BuilderRepository()
         self.workflow_repository = workflow_repository or WorkflowEventRepository(
@@ -46,6 +52,7 @@ class BuilderService:
         default_object_store, default_registry = create_execution_adapters(self.settings)
         self.object_store = object_store or default_object_store
         self.registry = registry or default_registry
+        self.runner = runner or AdapterBackedBuildRunner(self.object_store, self.registry)
         self.metrics = get_metrics_store("greenference-builder")
 
     def start_build(self, request: BuildRequest) -> BuildRecord:
@@ -101,6 +108,24 @@ class BuilderService:
     def list_build_logs(self, build_id: str) -> list[BuildLogRecord]:
         return self.repository.list_build_logs(build_id)
 
+    def stream_build_logs(self, build_id: str, *, follow: bool = False, poll_interval: float = 0.5) -> Iterator[str]:
+        seen_ids: set[str] = set()
+        while True:
+            logs = self.repository.list_build_logs(build_id)
+            for log in logs:
+                if log.log_id in seen_ids:
+                    continue
+                seen_ids.add(log.log_id)
+                yield f"data: {json.dumps(log.model_dump(mode='json'))}\n\n"
+            build = self.repository.get_build(build_id)
+            if build is None:
+                yield "event: error\ndata: {\"detail\":\"build not found\"}\n\n"
+                return
+            if not follow or build.status in {"published", "failed", "cancelled"}:
+                yield f"event: end\ndata: {json.dumps({'status': build.status, 'build_id': build_id})}\n\n"
+                return
+            time.sleep(poll_interval)
+
     def get_build_attempt(self, build_id: str, attempt: int) -> BuildAttemptRecord | None:
         return self.repository.get_build_attempt(build_id, attempt)
 
@@ -148,7 +173,7 @@ class BuilderService:
         build.artifact_uri = None
         build.artifact_digest = None
         build.registry_manifest_uri = None
-        build.build_log_uri = self.object_store.build_log_uri(build_id)
+        build.build_log_uri = self.runner.build_log_uri(build_id)
         build.executor_name = None
         build.updated_at = datetime.now(UTC)
         self.repository.save_build(build)
@@ -299,7 +324,7 @@ class BuilderService:
                 job.current_stage = "staging"
                 job.updated_at = datetime.now(UTC)
                 self.repository.save_build_job(job)
-                staged = self.object_store.stage_context(build, context)
+                staged = self.runner.stage_context(build, context)
                 self.repository.save_build_context(staged.context)
                 self.repository.add_build_event(
                     BuildEventRecord(
@@ -322,7 +347,7 @@ class BuilderService:
                 job.current_stage = "publishing"
                 job.updated_at = datetime.now(UTC)
                 self.repository.save_build_job(job)
-                published = self.registry.publish(build, staged.context)
+                published = self.runner.publish_image(build, staged.context)
                 build.status = "published"
                 build.registry_repository = published.registry_repository
                 build.image_tag = published.image_tag
@@ -384,7 +409,7 @@ class BuilderService:
                 build.failure_class = exc.failure_class
                 build.last_operation = exc.operation
                 build.retry_count = max(build.retry_count, max(0, event.attempts - 1))
-                build.build_log_uri = self.object_store.build_log_uri(build.build_id)
+                build.build_log_uri = self.runner.build_log_uri(build.build_id)
                 build.build_duration_seconds = max(
                     (datetime.now(UTC) - started_at).total_seconds(),
                     0.001,
@@ -435,7 +460,7 @@ class BuilderService:
                 build.failure_class = "build_validation_failure"
                 build.last_operation = "validate_context"
                 build.retry_count = max(build.retry_count, max(0, event.attempts - 1))
-                build.build_log_uri = self.object_store.build_log_uri(build.build_id)
+                build.build_log_uri = self.runner.build_log_uri(build.build_id)
                 build.build_duration_seconds = max(
                     (datetime.now(UTC) - started_at).total_seconds(),
                     0.001,
@@ -486,7 +511,7 @@ class BuilderService:
                 build.failure_reason = str(exc)
                 build.failure_class = "builder_runtime_error"
                 build.last_operation = build.last_operation or "unexpected"
-                build.build_log_uri = self.object_store.build_log_uri(build.build_id)
+                build.build_log_uri = self.runner.build_log_uri(build.build_id)
                 build.build_duration_seconds = max(
                     (datetime.now(UTC) - started_at).total_seconds(),
                     0.001,

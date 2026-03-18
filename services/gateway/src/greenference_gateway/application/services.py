@@ -85,6 +85,9 @@ class GatewayService:
     def list_build_logs(self, build_id: str) -> list[BuildLogRecord]:
         return self.builder.list_build_logs(build_id)
 
+    def stream_build_logs(self, build_id: str, *, follow: bool = False):
+        return self.builder.stream_build_logs(build_id, follow=follow)
+
     def get_build_attempt(self, build_id: str, attempt: int) -> BuildAttemptRecord | None:
         return self.builder.get_build_attempt(build_id, attempt)
 

@@ -39,6 +39,17 @@ class PublishedImage:
     message: str
 
 
+class BuildRunner:
+    def stage_context(self, build: BuildRecord, context: BuildContextRecord) -> StagedContext:
+        raise NotImplementedError
+
+    def publish_image(self, build: BuildRecord, context: BuildContextRecord) -> PublishedImage:
+        raise NotImplementedError
+
+    def build_log_uri(self, build_id: str) -> str:
+        raise NotImplementedError
+
+
 class ObjectStoreAdapter:
     def stage_context(self, build: BuildRecord, context: BuildContextRecord) -> StagedContext:
         raise NotImplementedError
@@ -56,6 +67,21 @@ class RegistryAdapter:
 
     def cleanup(self, build: BuildRecord) -> str:
         raise NotImplementedError
+
+
+class AdapterBackedBuildRunner(BuildRunner):
+    def __init__(self, object_store: ObjectStoreAdapter, registry: RegistryAdapter) -> None:
+        self.object_store = object_store
+        self.registry = registry
+
+    def stage_context(self, build: BuildRecord, context: BuildContextRecord) -> StagedContext:
+        return self.object_store.stage_context(build, context)
+
+    def publish_image(self, build: BuildRecord, context: BuildContextRecord) -> PublishedImage:
+        return self.registry.publish(build, context)
+
+    def build_log_uri(self, build_id: str) -> str:
+        return self.object_store.build_log_uri(build_id)
 
 
 class SimulatedObjectStoreAdapter(ObjectStoreAdapter):
