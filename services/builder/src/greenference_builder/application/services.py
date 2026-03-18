@@ -14,7 +14,16 @@ from greenference_persistence import (
     get_metrics_store,
     load_runtime_settings,
 )
-from greenference_protocol import BuildAttemptRecord, BuildContextRecord, BuildEventRecord, BuildJobRecord, BuildLogRecord, BuildRecord, BuildRequest
+from greenference_protocol import (
+    BuildAttemptRecord,
+    BuildContextRecord,
+    BuildEventRecord,
+    BuildJobCheckpointRecord,
+    BuildJobRecord,
+    BuildLogRecord,
+    BuildRecord,
+    BuildRequest,
+)
 from greenference_builder.infrastructure.execution import (
     AdapterBackedBuildRunner,
     BuildRunner,
@@ -144,6 +153,16 @@ class BuilderService:
     def list_build_jobs(self, build_id: str) -> list[BuildJobRecord]:
         return self.repository.list_build_jobs(build_id)
 
+    def latest_build_job_timeline(self, build_id: str) -> list[BuildJobCheckpointRecord]:
+        latest_job = self.repository.get_build_job(build_id)
+        if latest_job is None:
+            return []
+        return self.repository.list_build_job_checkpoints(
+            build_id,
+            attempt=latest_job.attempt,
+            job_id=latest_job.job_id,
+        )
+
     def recovery_status(self) -> dict[str, object | None]:
         return dict(self._recovery_state)
 
@@ -185,12 +204,21 @@ class BuilderService:
                 continue
             if self._has_active_delivery(build.build_id, latest_job.attempt, "build.job.progress"):
                 continue
+            recovered_at = datetime.now(UTC)
             latest_job.status = "queued"
-            latest_job.progress_message = (
-                f"recovered build job at stage {latest_job.current_stage}"
-            )
-            latest_job.updated_at = datetime.now(UTC)
+            latest_job.recovery_count += 1
+            latest_job.last_recovered_at = recovered_at
+            latest_job.progress_message = f"recovered build job at stage {latest_job.current_stage}"
+            latest_job.updated_at = recovered_at
             self.repository.save_build_job(latest_job)
+            self._record_job_checkpoint(
+                latest_job,
+                stage=latest_job.current_stage,
+                status="recovered",
+                message=latest_job.progress_message,
+                recovered=True,
+                created_at=recovered_at,
+            )
             self.repository.add_build_event(
                 BuildEventRecord(
                     build_id=build.build_id,
@@ -309,9 +337,17 @@ class BuilderService:
             latest_job.status = "cancelled"
             latest_job.current_stage = "cancelled"
             latest_job.failure_class = "cancelled"
+            latest_job.progress_message = "operator cancelled build"
             latest_job.finished_at = build.updated_at
             latest_job.updated_at = build.updated_at
             self.repository.save_build_job(latest_job)
+            self._record_job_checkpoint(
+                latest_job,
+                stage="cancelled",
+                status="cancelled",
+                message="operator cancelled build",
+                created_at=build.updated_at,
+            )
         self.repository.add_build_log(
             BuildLogRecord(
                 build_id=build.build_id,
@@ -469,6 +505,13 @@ class BuilderService:
                 updated_at=now,
             )
             self.repository.save_build_job(job)
+            self._record_job_checkpoint(
+                job,
+                stage=job.current_stage,
+                status="queued",
+                message=preparation.message,
+                created_at=now,
+            )
             self.repository.add_build_event(
                 BuildEventRecord(build_id=build.build_id, stage="job_started", message=preparation.message)
             )
@@ -517,6 +560,13 @@ class BuilderService:
         job.status = "running"
         job.updated_at = now
         self.repository.save_build_job(job)
+        self._record_job_checkpoint(
+            job,
+            stage=job.current_stage,
+            status="running",
+            message=f"running stage {job.current_stage}",
+            created_at=now,
+        )
         attempt.status = job.current_stage
         attempt.last_operation = job.current_stage
         self.repository.save_build_attempt(attempt)
@@ -542,6 +592,13 @@ class BuilderService:
         job.progress_message = result.message
         job.updated_at = now
         build.updated_at = now
+        self._record_job_checkpoint(
+            job,
+            stage=result.stage,
+            status="progress",
+            message=result.message,
+            created_at=now,
+        )
         self.repository.add_build_event(
             BuildEventRecord(build_id=build.build_id, stage=result.stage, message=result.message)
         )
@@ -560,6 +617,13 @@ class BuilderService:
         if result.next_stage is not None:
             job.current_stage = result.next_stage
             self.repository.save_build_job(job)
+            self._record_job_checkpoint(
+                job,
+                stage=result.next_stage,
+                status="queued",
+                message=f"queued next stage {result.next_stage}",
+                created_at=now,
+            )
             build.status = result.next_stage
             build.last_operation = result.stage
             self.repository.save_build(build)
@@ -593,6 +657,13 @@ class BuilderService:
         job.finished_at = now
         job.updated_at = now
         self.repository.save_build_job(job)
+        self._record_job_checkpoint(
+            job,
+            stage="succeeded",
+            status="succeeded",
+            message=result.message,
+            created_at=now,
+        )
         self.bus.publish(
             "build.job.succeeded",
             {
@@ -655,6 +726,13 @@ class BuilderService:
             job.finished_at = now
         job.updated_at = now
         self.repository.save_build_job(job)
+        self._record_job_checkpoint(
+            job,
+            stage=exc.operation or "failed",
+            status="failed",
+            message=build.failure_reason or str(exc),
+            created_at=now,
+        )
         self.bus.publish(
             "build.job.failed",
             {
@@ -686,6 +764,13 @@ class BuilderService:
             job.updated_at = now
             self.repository.save_build(build)
             self.repository.save_build_job(job)
+            self._record_job_checkpoint(
+                job,
+                stage=job.current_stage,
+                status="queued",
+                message=f"retry queued for stage {job.current_stage}",
+                created_at=now,
+            )
             self.bus.mark_failed(
                 event.delivery_id,
                 str(exc),
@@ -723,5 +808,28 @@ class BuilderService:
     @staticmethod
     def _context_digest(build_id: str, context_uri: str, dockerfile_path: str) -> str:
         return f"sha256:{hashlib.sha256(f'{build_id}:{context_uri}:{dockerfile_path}'.encode()).hexdigest()}"
+
+    def _record_job_checkpoint(
+        self,
+        job: BuildJobRecord,
+        *,
+        stage: str,
+        status: str,
+        message: str,
+        recovered: bool = False,
+        created_at: datetime | None = None,
+    ) -> BuildJobCheckpointRecord:
+        checkpoint = BuildJobCheckpointRecord(
+            job_id=job.job_id,
+            build_id=job.build_id,
+            attempt=job.attempt,
+            stage=stage,
+            status=status,
+            message=message,
+            recovered=recovered,
+            created_at=created_at or datetime.now(UTC),
+        )
+        self.repository.add_build_job_checkpoint(checkpoint)
+        return checkpoint
 
 service = BuilderService()

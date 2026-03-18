@@ -4,11 +4,20 @@ from sqlalchemy import select
 
 from greenference_persistence import create_db_engine, create_session_factory, init_database, session_scope
 from greenference_persistence.db import needs_bootstrap
-from greenference_persistence.orm import BuildAttemptORM, BuildContextORM, BuildEventORM, BuildJobORM, BuildLogORM, BuildORM
+from greenference_persistence.orm import (
+    BuildAttemptORM,
+    BuildContextORM,
+    BuildEventORM,
+    BuildJobCheckpointORM,
+    BuildJobORM,
+    BuildLogORM,
+    BuildORM,
+)
 from greenference_protocol import (
     BuildAttemptRecord,
     BuildContextRecord,
     BuildEventRecord,
+    BuildJobCheckpointRecord,
     BuildJobRecord,
     BuildLogRecord,
     BuildRecord,
@@ -134,11 +143,59 @@ class BuilderRepository:
             row.executor_name = job.executor_name
             row.failure_class = job.failure_class
             row.progress_message = job.progress_message
+            row.recovery_count = job.recovery_count
+            row.last_recovered_at = job.last_recovered_at
             row.started_at = job.started_at
             row.finished_at = job.finished_at
             row.updated_at = job.updated_at
             session.add(row)
         return job
+
+    def add_build_job_checkpoint(self, checkpoint: BuildJobCheckpointRecord) -> BuildJobCheckpointRecord:
+        with session_scope(self.session_factory) as session:
+            session.add(
+                BuildJobCheckpointORM(
+                    checkpoint_id=checkpoint.checkpoint_id,
+                    job_id=checkpoint.job_id,
+                    build_id=checkpoint.build_id,
+                    attempt=checkpoint.attempt,
+                    stage=checkpoint.stage,
+                    status=checkpoint.status,
+                    message=checkpoint.message,
+                    recovered=checkpoint.recovered,
+                    created_at=checkpoint.created_at,
+                )
+            )
+        return checkpoint
+
+    def list_build_job_checkpoints(
+        self,
+        build_id: str,
+        *,
+        attempt: int | None = None,
+        job_id: str | None = None,
+    ) -> list[BuildJobCheckpointRecord]:
+        with session_scope(self.session_factory) as session:
+            stmt = select(BuildJobCheckpointORM).where(BuildJobCheckpointORM.build_id == build_id)
+            if attempt is not None:
+                stmt = stmt.where(BuildJobCheckpointORM.attempt == attempt)
+            if job_id is not None:
+                stmt = stmt.where(BuildJobCheckpointORM.job_id == job_id)
+            rows = session.scalars(stmt.order_by(BuildJobCheckpointORM.created_at.asc())).all()
+            return [
+                BuildJobCheckpointRecord(
+                    checkpoint_id=row.checkpoint_id,
+                    job_id=row.job_id,
+                    build_id=row.build_id,
+                    attempt=row.attempt,
+                    stage=row.stage,
+                    status=row.status,
+                    message=row.message,
+                    recovered=row.recovered,
+                    created_at=row.created_at,
+                )
+                for row in rows
+            ]
 
     def get_build_job(self, build_id: str, attempt: int | None = None) -> BuildJobRecord | None:
         with session_scope(self.session_factory) as session:
@@ -293,6 +350,8 @@ class BuilderRepository:
             executor_name=row.executor_name,
             failure_class=row.failure_class,
             progress_message=row.progress_message,
+            recovery_count=row.recovery_count,
+            last_recovered_at=row.last_recovered_at,
             started_at=row.started_at,
             finished_at=row.finished_at,
             updated_at=row.updated_at,

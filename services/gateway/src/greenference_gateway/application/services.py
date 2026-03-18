@@ -19,6 +19,7 @@ from greenference_protocol import (
     APIKeyRecord,
     BuildContextRecord,
     BuildEventRecord,
+    BuildJobCheckpointRecord,
     BuildJobRecord,
     BuildLogRecord,
     BuildRecord,
@@ -96,6 +97,9 @@ class GatewayService:
 
     def list_build_jobs(self, build_id: str) -> list[BuildJobRecord]:
         return self.builder.list_build_jobs(build_id)
+
+    def latest_build_job_timeline(self, build_id: str) -> list[BuildJobCheckpointRecord]:
+        return self.builder.latest_build_job_timeline(build_id)
 
     def cancel_latest_build_job(self, build_id: str) -> BuildRecord:
         return self.builder.cancel_latest_job(build_id)

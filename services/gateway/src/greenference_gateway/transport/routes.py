@@ -135,6 +135,18 @@ def get_latest_build_job(
     return job.model_dump(mode="json")
 
 
+@router.get("/platform/builds/{build_id}/jobs/latest/timeline")
+def get_latest_build_job_timeline(
+    build_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    if service.get_build_job(build_id) is None:
+        raise HTTPException(status_code=404, detail="build job not found")
+    return [entry.model_dump(mode="json") for entry in service.latest_build_job_timeline(build_id)]
+
+
 @router.post("/platform/builds/{build_id}/jobs/latest/cancel")
 def cancel_latest_build_job(
     build_id: str,

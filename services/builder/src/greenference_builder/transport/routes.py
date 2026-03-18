@@ -22,6 +22,11 @@ def get_build(build_id: str) -> dict | None:
     return build.model_dump(mode="json") if build is not None else None
 
 
+@router.get("/builder/v1/builds/{build_id}/jobs/latest/timeline")
+def latest_build_job_timeline(build_id: str) -> list[dict]:
+    return [entry.model_dump(mode="json") for entry in service.latest_build_job_timeline(build_id)]
+
+
 @router.get("/builder/v1/images/{image:path}/history")
 def image_history(image: str) -> list[dict]:
     return [build.model_dump(mode="json") for build in service.list_image_history(image)]

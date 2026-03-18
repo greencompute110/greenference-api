@@ -297,9 +297,25 @@ class BuildJobORM(Base):
     executor_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     failure_class: Mapped[str | None] = mapped_column(String(128), nullable=True)
     progress_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recovery_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_recovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class BuildJobCheckpointORM(Base):
+    __tablename__ = "build_job_checkpoints"
+
+    checkpoint_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(64), index=True)
+    build_id: Mapped[str] = mapped_column(String(64), index=True)
+    attempt: Mapped[int] = mapped_column(Integer, index=True)
+    stage: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    message: Mapped[str] = mapped_column(Text)
+    recovered: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
 class BuildLogORM(Base):
