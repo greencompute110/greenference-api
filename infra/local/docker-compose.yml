@@ -226,6 +226,53 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+  compute-agent:
+    image: python:3.12-slim
+    working_dir: /workspace/greenference-compute
+    volumes:
+      - ../../../:/workspace
+    environment:
+      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      GREENFERENCE_DB_BOOTSTRAP: "false"
+      GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
+      GREENFERENCE_BOOTSTRAP_MINER: "true"
+      GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
+      GREENFERENCE_MINER_HOTKEY: compute-local
+      GREENFERENCE_MINER_PAYOUT_ADDRESS: 5FcomputeLocal
+      GREENFERENCE_MINER_AUTH_SECRET: greenference-compute-local-secret
+      GREENFERENCE_MINER_API_BASE_URL: http://compute-agent:8006
+      GREENFERENCE_MINER_VALIDATOR_URL: http://validator:8002
+      GREENFERENCE_MINER_NODE_ID: compute-node-local
+      GREENFERENCE_GPU_MODEL: a100
+      GREENFERENCE_GPU_COUNT: "1"
+      GREENFERENCE_VRAM_GB_PER_GPU: "80"
+      GREENFERENCE_CPU_CORES: "32"
+      GREENFERENCE_MEMORY_GB: "128"
+      GREENFERENCE_PERFORMANCE_SCORE: "1.0"
+      GREENFERENCE_GPU_SPLIT_UNITS: "100"
+      GREENFERENCE_POD_BACKEND: stub
+      GREENFERENCE_VM_BACKEND: stub
+      GREENFERENCE_SSH_HOST: "0.0.0.0"
+      GREENFERENCE_SSH_PORT_RANGE_START: "30000"
+      GREENFERENCE_SSH_PORT_RANGE_END: "31000"
+      GREENFERENCE_VOLUME_BASE_DIR: /tmp/greenference-volumes
+      GREENFERENCE_SUPPORTED_WORKLOAD_KINDS: pod,vm
+      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-api/services/builder/src:/workspace/greenference-compute/services/compute-agent/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      control-plane:
+        condition: service_healthy
+    command: >
+      sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      uvicorn greenference_compute_agent.main:app --host 0.0.0.0 --port 8006"
+    ports:
+      - "${GREENFERENCE_LOCAL_COMPUTE_PORT:-28006}:8006"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8006/readyz')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
   miner-agent-b:
     image: python:3.12-slim
     working_dir: /workspace/greenference-miner
