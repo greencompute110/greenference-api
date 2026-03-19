@@ -102,6 +102,14 @@ def _request_text(method: str, url: str, payload: dict | None = None, headers: d
         return response.read().decode()
 
 
+def _miner_url_for_hotkey(hotkey: str | None) -> str:
+    if hotkey == MINER_HOTKEY:
+        return MINER_URL
+    if hotkey == FAILOVER_MINER_HOTKEY:
+        return FAILOVER_MINER_URL
+    raise RuntimeError(f"unknown miner hotkey for runtime inspection: {hotkey}")
+
+
 def _wait_json(url: str, predicate, timeout: float = TIMEOUT_SECONDS, headers: dict[str, str] | None = None):
     deadline = time.time() + timeout
     last_error: str | None = None
@@ -198,6 +206,17 @@ def _cleanup_active_deployments(headers: dict[str, str]) -> None:
 def run_happy_path() -> dict[str, Any]:
     headers, _user = _register_admin()
     _cleanup_active_deployments(headers)
+    for miner_url, hotkey in ((MINER_URL, MINER_HOTKEY), (FAILOVER_MINER_URL, FAILOVER_MINER_HOTKEY)):
+        _request_json(
+            "POST",
+            f"{miner_url}/agent/v1/heartbeat",
+            {
+                "hotkey": hotkey,
+                "healthy": True,
+                "active_deployments": 0,
+                "active_leases": 0,
+            },
+        )
     run_suffix = f"{time.time_ns():x}"
     workload_name = f"stack-echo-model-{run_suffix}"
     workload_alias = f"stack-echo-alias-{run_suffix}"
@@ -302,7 +321,8 @@ def run_happy_path() -> dict[str, Any]:
     ready = next(item for item in deployments if item["deployment_id"] == deployment["deployment_id"])
     print(f"deployment ready: {ready['endpoint']}")
 
-    runtime_records = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes")
+    runtime_base_url = _miner_url_for_hotkey(ready.get("hotkey"))
+    runtime_records = _request_json("GET", f"{runtime_base_url}/agent/v1/runtimes")
     runtime = next((item for item in runtime_records if item["deployment_id"] == deployment["deployment_id"]), None)
     if runtime is None:
         raise RuntimeError("miner runtime record missing after reconcile")
@@ -313,9 +333,9 @@ def run_happy_path() -> dict[str, Any]:
     if runtime.get("backend_name") == "process-local-runtime":
         if not runtime.get("runtime_url") or not runtime.get("process_id"):
             raise RuntimeError("process-backed miner runtime missing runtime URL or process id")
-    runtime_detail = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes/{deployment['deployment_id']}")
-    runtime_summary = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes/summary")
-    runtime_health = _request_json("GET", f"{MINER_URL}/deployments/{deployment['deployment_id']}/healthz")
+    runtime_detail = _request_json("GET", f"{runtime_base_url}/agent/v1/runtimes/{deployment['deployment_id']}")
+    runtime_summary = _request_json("GET", f"{runtime_base_url}/agent/v1/runtimes/summary")
+    runtime_health = _request_json("GET", f"{runtime_base_url}/deployments/{deployment['deployment_id']}/healthz")
     if runtime_detail["deployment_id"] != deployment["deployment_id"]:
         raise RuntimeError("miner runtime detail endpoint returned wrong deployment")
     if runtime_summary["total"] < 1 or runtime_summary["by_status"].get("ready", 0) < 1:
@@ -442,6 +462,24 @@ def _restart_services(services: tuple[str, ...]) -> None:
         return
     subprocess.run(  # noqa: S603
         ["docker", "compose", "-f", COMPOSE_FILE, "restart", *services],
+        check=True,
+    )
+
+
+def _stop_services(services: tuple[str, ...]) -> None:
+    if not services:
+        return
+    subprocess.run(  # noqa: S603
+        ["docker", "compose", "-f", COMPOSE_FILE, "stop", *services],
+        check=True,
+    )
+
+
+def _start_services(services: tuple[str, ...]) -> None:
+    if not services:
+        return
+    subprocess.run(  # noqa: S603
+        ["docker", "compose", "-f", COMPOSE_FILE, "start", *services],
         check=True,
     )
 
@@ -615,65 +653,69 @@ def verify_failover(context: dict[str, Any]) -> None:
     headers = context["headers"]
     workload = context["workload"]
     deployment = context["deployment"]
-    unhealthy_payload = {
-        "hotkey": MINER_HOTKEY,
-        "healthy": False,
-        "active_deployments": 0,
-        "active_leases": 0,
-    }
-    _request_json(
-        "POST",
-        f"{MINER_URL}/agent/v1/heartbeat",
-        unhealthy_payload,
-    )
-    print("primary miner marked unhealthy")
+    _stop_services(("miner-agent",))
+    print("primary miner stopped")
+    try:
+        reassignments = _wait_json(
+            f"{CONTROL_PLANE_URL}/platform/v1/debug/reassignments",
+            lambda body: any(item["payload"]["deployment_id"] == deployment["deployment_id"] for item in body),
+            headers=headers,
+            timeout=TIMEOUT_SECONDS,
+        )
+        print(f"reassignment observed: {reassignments[-1]['payload']}")
 
-    reassignments = _wait_json(
-        f"{CONTROL_PLANE_URL}/platform/v1/debug/reassignments",
-        lambda body: any(item["payload"]["deployment_id"] == deployment["deployment_id"] for item in body),
-        headers=headers,
-        timeout=TIMEOUT_SECONDS,
-    )
-    print(f"reassignment observed: {reassignments[-1]['payload']}")
+        miners = _wait_json(
+            f"{CONTROL_PLANE_URL}/platform/v1/debug/miners",
+            lambda body: any(item["hotkey"] == MINER_HOTKEY and item["status"] != "healthy" for item in body),
+            headers=headers,
+            timeout=min(TIMEOUT_SECONDS, 20),
+        )
+        print(f"miner health: {miners}")
 
-    miners = _wait_json(
-        f"{CONTROL_PLANE_URL}/platform/v1/debug/miners",
-        lambda body: any(item["hotkey"] == MINER_HOTKEY and item["status"] == "unhealthy" for item in body),
-        headers=headers,
-        timeout=TIMEOUT_SECONDS,
-    )
-    print(f"miner health: {miners}")
+        deployments = _wait_json(
+            f"{CONTROL_PLANE_URL}/platform/v1/debug/deployments",
+            lambda body: any(
+                item["deployment_id"] == deployment["deployment_id"]
+                and item["state"] == "ready"
+                and item["hotkey"] == FAILOVER_MINER_HOTKEY
+                for item in body
+            ),
+            headers=headers,
+            timeout=TIMEOUT_SECONDS,
+        )
+        ready = next(item for item in deployments if item["deployment_id"] == deployment["deployment_id"])
+        print(f"deployment failed over: {ready['hotkey']} -> {ready['endpoint']}")
 
-    deployments = _wait_json(
-        f"{CONTROL_PLANE_URL}/platform/v1/debug/deployments",
+        failover_runtime = _request_json("GET", f"{FAILOVER_MINER_URL}/agent/v1/runtimes/{deployment['deployment_id']}")
+        if failover_runtime.get("status") != "ready":
+            raise RuntimeError("failover miner runtime did not reach ready state")
+
+        response = _request_json(
+            "POST",
+            f"{GATEWAY_URL}/v1/chat/completions",
+            {"model": workload["workload_id"], "messages": [{"role": "user", "content": "hello failover"}]},
+            headers=headers,
+        )
+        if response["routed_hotkey"] != FAILOVER_MINER_HOTKEY:
+            raise RuntimeError(f"expected failover hotkey {FAILOVER_MINER_HOTKEY}, got {response['routed_hotkey']}")
+        print(f"post-failover inference response: {response['content']}")
+    finally:
+        _start_services(("miner-agent",))
+        _wait_json(f"{MINER_URL}/readyz", lambda body: body.get("status") == "ok")
+
+    primary_placements = _wait_json(
+        f"{MINER_URL}/agent/v1/placements",
         lambda body: any(
-            item["deployment_id"] == deployment["deployment_id"]
-            and item["state"] == "ready"
-            and item["hotkey"] == FAILOVER_MINER_HOTKEY
-            for item in body
+            item["deployment_id"] == deployment["deployment_id"] and item["status"] == "released"
+            for item in body.get("placements", [])
         ),
-        headers=headers,
         timeout=TIMEOUT_SECONDS,
     )
-    ready = next(item for item in deployments if item["deployment_id"] == deployment["deployment_id"])
-    print(f"deployment failed over: {ready['hotkey']} -> {ready['endpoint']}")
-
-    failover_runtime = _request_json("GET", f"{FAILOVER_MINER_URL}/agent/v1/runtimes/{deployment['deployment_id']}")
-    primary_failed = _request_json("GET", f"{MINER_URL}/agent/v1/runtimes/failed")
-    if failover_runtime.get("status") != "ready":
-        raise RuntimeError("failover miner runtime did not reach ready state")
-    if not any(item["deployment_id"] == deployment["deployment_id"] for item in primary_failed):
-        raise RuntimeError("primary miner did not retain failed runtime visibility after failover")
-
-    response = _request_json(
-        "POST",
-        f"{GATEWAY_URL}/v1/chat/completions",
-        {"model": workload["workload_id"], "messages": [{"role": "user", "content": "hello failover"}]},
-        headers=headers,
-    )
-    if response["routed_hotkey"] != FAILOVER_MINER_HOTKEY:
-        raise RuntimeError(f"expected failover hotkey {FAILOVER_MINER_HOTKEY}, got {response['routed_hotkey']}")
-    print(f"post-failover inference response: {response['content']}")
+    if not any(
+        item["deployment_id"] == deployment["deployment_id"] and item["status"] == "released"
+        for item in primary_placements.get("placements", [])
+    ):
+        raise RuntimeError("primary miner did not retain released placement visibility after failover")
 
 
 def verify_miner_runtime(context: dict[str, Any]) -> None:
