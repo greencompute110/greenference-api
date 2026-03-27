@@ -72,7 +72,7 @@ services:
       migrate:
         condition: service_completed_successfully
     command: >
-      sh -lc "pip install -q psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      sh -lc "pip install -q psycopg[binary] sqlalchemy fastapi uvicorn pydantic substrate-interface &&
       uvicorn greenference_control_plane.main:app --host 0.0.0.0 --port 8001"
     ports:
       - "28001:8001"
