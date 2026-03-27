@@ -1,0 +1,106 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: greenference
+      POSTGRES_USER: greenference
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-greenference123}
+    volumes:
+      - validator-db:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U greenference -d greenference"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    image: python:3.12-slim
+    working_dir: /workspace/greenference-api
+    volumes:
+      - /workspace:/workspace
+    environment:
+      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
+      GREENFERENCE_DB_BOOTSTRAP: "false"
+      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-api/services/validator/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -lc "pip install -q alembic psycopg[binary] sqlalchemy fastapi pydantic &&
+      alembic -c /workspace/greenference-api/alembic.ini upgrade head"
+
+  control-plane:
+    image: python:3.12-slim
+    working_dir: /workspace/greenference-api
+    volumes:
+      - /workspace:/workspace
+    environment:
+      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
+      GREENFERENCE_DB_BOOTSTRAP: "false"
+      GREENFERENCE_ADMIN_API_KEY: ${ADMIN_API_KEY:-changeme}
+      GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
+      GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "1.0"
+      GREENFERENCE_NETUID: "16"
+      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/control-plane/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: >
+      sh -lc "pip install -q psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
+      uvicorn greenference_control_plane.main:app --host 0.0.0.0 --port 8001"
+    ports:
+      - "28001:8001"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8001/readyz')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  validator:
+    image: python:3.12-slim
+    working_dir: /workspace/greenference-api
+    volumes:
+      - /workspace:/workspace
+      - ${BITTENSOR_WALLET_DIR:-/root/.bittensor}:/root/.bittensor:ro
+    environment:
+      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
+      GREENFERENCE_DB_BOOTSTRAP: "false"
+      GREENFERENCE_ADMIN_API_KEY: ${ADMIN_API_KEY:-changeme}
+      GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
+      GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "1.0"
+      # Bittensor
+      GREENFERENCE_BITTENSOR_ENABLED: ${BITTENSOR_ENABLED:-false}
+      GREENFERENCE_BITTENSOR_NETWORK: ${BITTENSOR_NETWORK:-test}
+      GREENFERENCE_BITTENSOR_NETUID: ${BITTENSOR_NETUID:-16}
+      GREENFERENCE_BITTENSOR_WALLET_PATH: ${BITTENSOR_WALLET_PATH:-}
+      # Flux orchestrator
+      GREENFERENCE_FLUX_INFERENCE_FLOOR_PCT: ${FLUX_INFERENCE_FLOOR_PCT:-20}
+      GREENFERENCE_FLUX_RENTAL_FLOOR_PCT: ${FLUX_RENTAL_FLOOR_PCT:-10}
+      GREENFERENCE_FLUX_REBALANCE_INTERVAL_SECONDS: ${FLUX_REBALANCE_INTERVAL_SECONDS:-60}
+      # Scoring
+      GREENFERENCE_SCORE_DELTA: ${SCORE_DELTA:-0.8}
+      GREENFERENCE_RENTAL_REVENUE_BONUS_CAP: ${RENTAL_REVENUE_BONUS_CAP:-0.1}
+      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-api/services/validator/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      control-plane:
+        condition: service_healthy
+    command: >
+      sh -lc "pip install -q psycopg[binary] sqlalchemy fastapi uvicorn pydantic substrate-interface &&
+      uvicorn greenference_validator.main:app --host 0.0.0.0 --port 8002"
+    ports:
+      - "28002:8002"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8002/readyz')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  validator-db:
