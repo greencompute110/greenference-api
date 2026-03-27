@@ -24,6 +24,7 @@ VALIDATOR_URL = os.getenv("GREENFERENCE_VALIDATOR_URL", "http://127.0.0.1:28002"
 BUILDER_URL = os.getenv("GREENFERENCE_BUILDER_URL", "http://127.0.0.1:28003")
 MINER_URL = os.getenv("GREENFERENCE_MINER_URL", "http://127.0.0.1:28004")
 FAILOVER_MINER_URL = os.getenv("GREENFERENCE_FAILOVER_MINER_URL", "http://127.0.0.1:28005")
+NODE_AGENT_URL = os.getenv("GREENFERENCE_NODE_AGENT_URL", "http://127.0.0.1:28007")
 NATS_MONITOR_URL = os.getenv("GREENFERENCE_NATS_MONITOR_URL", "http://127.0.0.1:18222/healthz")
 TIMEOUT_SECONDS = float(os.getenv("GREENFERENCE_STACK_TIMEOUT_SECONDS", "60"))
 MINER_HOTKEY = os.getenv("GREENFERENCE_MINER_HOTKEY", "miner-local")
@@ -145,12 +146,19 @@ def _service_ready_payload(base_url: str, payload: dict[str, Any]) -> bool:
             return False
         if payload.get("runtime_count") is None:
             return False
+    if base_url == NODE_AGENT_URL:
+        if not payload.get("worker_running"):
+            return False
+        if payload.get("worker_last_iteration") in {None, ""}:
+            return False
+        if not payload.get("bootstrapped"):
+            return False
     return True
 
 
 def wait_for_stack_readiness() -> None:
     print("waiting for service readiness")
-    for base_url in [GATEWAY_URL, CONTROL_PLANE_URL, VALIDATOR_URL, BUILDER_URL, MINER_URL, FAILOVER_MINER_URL]:
+    for base_url in [GATEWAY_URL, CONTROL_PLANE_URL, VALIDATOR_URL, BUILDER_URL, MINER_URL, FAILOVER_MINER_URL, NODE_AGENT_URL]:
         payload = _wait_json(f"{base_url}/readyz", lambda body: _service_ready_payload(base_url, body))
         print(f"ready: {base_url} -> {payload}")
 
@@ -826,6 +834,31 @@ def verify_operator_actions(context: dict[str, Any]) -> None:
         raise RuntimeError("miner undrain did not complete")
 
 
+def verify_node_agent() -> None:
+    """Verify the unified node-agent is running and registered correctly."""
+    readyz = _request_json("GET", f"{NODE_AGENT_URL}/readyz")
+    if not readyz.get("bootstrapped"):
+        raise RuntimeError("node-agent did not bootstrap")
+    if not readyz.get("worker_running"):
+        raise RuntimeError("node-agent worker not running")
+
+    fleet = _request_json("GET", f"{NODE_AGENT_URL}/agent/v1/fleet")
+    if fleet.get("hotkey") != "node-unified":
+        raise RuntimeError(f"node-agent fleet hotkey mismatch: {fleet.get('hotkey')}")
+    if "inference" not in fleet.get("supported_kinds", []):
+        raise RuntimeError("node-agent missing inference in supported_kinds")
+
+    runtimes = _request_json("GET", f"{NODE_AGENT_URL}/agent/v1/runtimes")
+    if not isinstance(runtimes, list):
+        raise RuntimeError("node-agent runtimes endpoint did not return a list")
+
+    summary = _request_json("GET", f"{NODE_AGENT_URL}/agent/v1/runtimes/summary")
+    if "total" not in summary:
+        raise RuntimeError("node-agent runtime summary missing total field")
+
+    print(f"node-agent verified: fleet={fleet['hotkey']}, kinds={fleet['supported_kinds']}, runtimes={summary['total']}")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = argv or sys.argv[1:]
     check_recovery = "--check-recovery" in args
@@ -834,8 +867,11 @@ def main(argv: list[str] | None = None) -> int:
     check_failures = "--check-failures" in args
     check_operator_actions = "--check-operator-actions" in args
     check_miner_runtime = "--check-miner-runtime" in args
+    check_node_agent = "--check-node-agent" in args
 
     wait_for_stack_readiness()
+    if check_node_agent:
+        verify_node_agent()
     context = run_happy_path()
     _assert_metrics(context["headers"], context["deployment"]["deployment_id"])
     if check_miner_runtime:
