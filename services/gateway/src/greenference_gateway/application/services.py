@@ -67,6 +67,7 @@ class GatewayService:
         self.builder = builder or default_builder_service
         self.inference_client = inference_client or HttpInferenceClient()
         self.metrics = gateway_metrics
+        self._round_robin_counter = 0
 
     def register_user(self, request: UserRegistrationRequest) -> UserRecord:
         user = UserRecord(username=request.username, email=request.email)
@@ -444,11 +445,31 @@ class GatewayService:
     ):
         request_id = str(uuid4())
         started = perf_counter()
-        deployment, routing = self._select_deployment_for_request(request, routed_host=routed_host)
-        try:
-            response = self._invoke_upstream_response(deployment, request, request_id=request_id)
-        except RuntimeError as exc:
-            self._handle_upstream_failure(deployment, routing, exc)
+        candidates, routing = self._select_healthy_deployments(request, routed_host=routed_host)
+        last_exc: RuntimeError | None = None
+        for deployment in candidates:
+            try:
+                response = self._invoke_upstream_response(deployment, request, request_id=request_id)
+            except RuntimeError as exc:
+                last_exc = exc
+                self._handle_upstream_failure(deployment, routing, exc)
+                self._record_invocation(
+                    deployment,
+                    request,
+                    routing=routing,
+                    request_id=request_id,
+                    api_key_id=api_key_id,
+                    stream=False,
+                    started=started,
+                    status="failed",
+                    error_class=self._classify_inference_error(exc),
+                )
+                continue
+            self._handle_upstream_success(deployment, routing)
+            self._record_usage(deployment, stream=False, stream_chunk_count=0)
+            latency_ms = (perf_counter() - started) * 1000.0
+            self.metrics.observe("invoke.latency_ms", latency_ms)
+            response.id = request_id
             self._record_invocation(
                 deployment,
                 request,
@@ -457,26 +478,10 @@ class GatewayService:
                 api_key_id=api_key_id,
                 stream=False,
                 started=started,
-                status="failed",
-                error_class=self._classify_inference_error(exc),
+                status="succeeded",
             )
-            raise
-        self._handle_upstream_success(deployment, routing)
-        self._record_usage(deployment, stream=False, stream_chunk_count=0)
-        latency_ms = (perf_counter() - started) * 1000.0
-        self.metrics.observe("invoke.latency_ms", latency_ms)
-        response.id = request_id
-        self._record_invocation(
-            deployment,
-            request,
-            routing=routing,
-            request_id=request_id,
-            api_key_id=api_key_id,
-            stream=False,
-            started=started,
-            status="succeeded",
-        )
-        return response
+            return response
+        raise last_exc  # type: ignore[misc]
 
     def stream_chat_completion(
         self,
@@ -486,19 +491,40 @@ class GatewayService:
     ) -> Iterator[str]:
         request_id = str(uuid4())
         started = perf_counter()
-        deployment, routing = self._select_deployment_for_request(request, routed_host=routed_host)
-        chunk_count = 0
-        try:
-            for line in self._invoke_upstream_stream(deployment, request, request_id=request_id):
-                stripped = line.strip()
-                if stripped.startswith("data: ") and stripped != "data: [DONE]":
-                    payload = loads(stripped[6:])
-                    choices = payload.get("choices", [])
-                    if choices and choices[0].get("delta", {}).get("content"):
-                        chunk_count += 1
-                yield line
-        except RuntimeError as exc:
-            self._handle_upstream_failure(deployment, routing, exc)
+        candidates, routing = self._select_healthy_deployments(request, routed_host=routed_host)
+        last_exc: RuntimeError | None = None
+        for deployment in candidates:
+            chunk_count = 0
+            try:
+                for line in self._invoke_upstream_stream(deployment, request, request_id=request_id):
+                    stripped = line.strip()
+                    if stripped.startswith("data: ") and stripped != "data: [DONE]":
+                        payload = loads(stripped[6:])
+                        choices = payload.get("choices", [])
+                        if choices and choices[0].get("delta", {}).get("content"):
+                            chunk_count += 1
+                    yield line
+            except RuntimeError as exc:
+                last_exc = exc
+                self._handle_upstream_failure(deployment, routing, exc)
+                self._record_invocation(
+                    deployment,
+                    request,
+                    routing=routing,
+                    request_id=request_id,
+                    api_key_id=api_key_id,
+                    stream=True,
+                    started=started,
+                    status="failed",
+                    error_class=self._classify_inference_error(exc),
+                )
+                # Only retry if no chunks have been yielded yet
+                if chunk_count > 0:
+                    raise
+                continue
+            self._handle_upstream_success(deployment, routing)
+            self._record_usage(deployment, stream=True, stream_chunk_count=chunk_count)
+            self.metrics.observe("invoke.latency_ms", (perf_counter() - started) * 1000.0)
             self._record_invocation(
                 deployment,
                 request,
@@ -507,23 +533,11 @@ class GatewayService:
                 api_key_id=api_key_id,
                 stream=True,
                 started=started,
-                status="failed",
-                error_class=self._classify_inference_error(exc),
+                status="succeeded",
             )
-            raise
-        self._handle_upstream_success(deployment, routing)
-        self._record_usage(deployment, stream=True, stream_chunk_count=chunk_count)
-        self.metrics.observe("invoke.latency_ms", (perf_counter() - started) * 1000.0)
-        self._record_invocation(
-            deployment,
-            request,
-            routing=routing,
-            request_id=request_id,
-            api_key_id=api_key_id,
-            stream=True,
-            started=started,
-            status="succeeded",
-        )
+            return
+        if last_exc is not None:
+            raise last_exc
 
     def resolve_workload_reference(self, model: str, routed_host: str | None = None) -> tuple[WorkloadSpec, dict]:
         normalized_host = self._normalize_host(routed_host)
@@ -553,11 +567,12 @@ class GatewayService:
                 return workload_item, {"matched_by": "name_scan", "host": normalized_host, "model": model}
         raise NoReadyDeploymentError(f"unknown model={model}")
 
-    def _select_deployment_for_request(
+    def _select_healthy_deployments(
         self,
         request: ChatCompletionRequest,
         routed_host: str | None = None,
-    ) -> tuple[DeploymentRecord, dict]:
+    ) -> tuple[list[DeploymentRecord], dict]:
+        """Return all healthy deployments in round-robin order, plus routing metadata."""
         workload, routing = self.resolve_workload_reference(request.model, routed_host=routed_host)
         workload_id = workload.workload_id
         candidates = [
@@ -577,6 +592,7 @@ class GatewayService:
             )
             raise NoReadyDeploymentError(f"no ready deployment for model={request.model}")
 
+        healthy: list[DeploymentRecord] = []
         for deployment in candidates:
             if not self.inference_client.check_deployment_health(deployment):
                 self.control_plane.record_deployment_health_failure(
@@ -604,24 +620,43 @@ class GatewayService:
                     "created_at": datetime.now(UTC).isoformat(),
                 }
             )
-            return deployment, {
-                **routing,
-                "workload_id": workload_id,
-                "selected_deployment_id": deployment.deployment_id,
-                "selected_hotkey": deployment.hotkey,
-                "routing_reason": "ready_and_healthy",
-            }
+            healthy.append(deployment)
 
-        self.repository.record_routing_decision(
-            {
-                **routing,
-                "workload_id": workload_id,
-                "decision": "rejected",
-                "reason": "no_healthy_deployment",
-                "created_at": datetime.now(UTC).isoformat(),
-            }
-        )
-        raise NoReadyDeploymentError(f"no healthy deployment available for model={request.model}")
+        if not healthy:
+            self.repository.record_routing_decision(
+                {
+                    **routing,
+                    "workload_id": workload_id,
+                    "decision": "rejected",
+                    "reason": "no_healthy_deployment",
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+            )
+            raise NoReadyDeploymentError(f"no healthy deployment available for model={request.model}")
+
+        # Round-robin: rotate the healthy list so each request starts at a different deployment
+        offset = self._round_robin_counter % len(healthy)
+        self._round_robin_counter += 1
+        ordered = healthy[offset:] + healthy[:offset]
+
+        routing_out = {
+            **routing,
+            "workload_id": workload_id,
+            "selected_deployment_id": ordered[0].deployment_id,
+            "selected_hotkey": ordered[0].hotkey,
+            "routing_reason": "ready_and_healthy",
+            "candidate_count": len(ordered),
+        }
+        return ordered, routing_out
+
+    def _select_deployment_for_request(
+        self,
+        request: ChatCompletionRequest,
+        routed_host: str | None = None,
+    ) -> tuple[DeploymentRecord, dict]:
+        """Select a single deployment (backwards compat). Prefers round-robin."""
+        candidates, routing = self._select_healthy_deployments(request, routed_host=routed_host)
+        return candidates[0], routing
 
     def _invoke_upstream_response(
         self,
