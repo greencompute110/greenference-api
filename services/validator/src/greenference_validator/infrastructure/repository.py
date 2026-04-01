@@ -5,13 +5,14 @@ from sqlalchemy import select
 from greenference_persistence import create_db_engine, create_session_factory, init_database, session_scope
 from greenference_persistence.db import needs_bootstrap
 from greenference_persistence.orm import (
+    MinerWhitelistORM,
     ProbeChallengeORM,
     ProbeResultORM,
     ScoreCardORM,
     ValidatorCapabilityORM,
     WeightSnapshotORM,
 )
-from greenference_protocol import NodeCapability, ProbeChallenge, ProbeResult, ScoreCard, WeightSnapshot
+from greenference_protocol import MinerWhitelistEntry, NodeCapability, ProbeChallenge, ProbeResult, ScoreCard, WeightSnapshot
 
 
 class ValidatorRepository:
@@ -189,3 +190,54 @@ class ValidatorRepository:
                 )
                 for row in rows
             ]
+
+    # --- Miner whitelist ---
+
+    def add_whitelist_entry(self, entry: MinerWhitelistEntry) -> MinerWhitelistEntry:
+        with session_scope(self.session_factory) as session:
+            row = session.get(MinerWhitelistORM, entry.hotkey) or MinerWhitelistORM(hotkey=entry.hotkey)
+            row.label = entry.label
+            row.energy_source = entry.energy_source
+            row.notes = entry.notes
+            row.approved_at = entry.approved_at
+            session.add(row)
+        return entry
+
+    def remove_whitelist_entry(self, hotkey: str) -> bool:
+        with session_scope(self.session_factory) as session:
+            row = session.get(MinerWhitelistORM, hotkey)
+            if row is None:
+                return False
+            session.delete(row)
+            return True
+
+    def get_whitelist_entry(self, hotkey: str) -> MinerWhitelistEntry | None:
+        with session_scope(self.session_factory) as session:
+            row = session.get(MinerWhitelistORM, hotkey)
+            if row is None:
+                return None
+            return MinerWhitelistEntry(
+                hotkey=row.hotkey,
+                label=row.label,
+                energy_source=row.energy_source,
+                notes=row.notes or "",
+                approved_at=row.approved_at,
+            )
+
+    def list_whitelist(self) -> list[MinerWhitelistEntry]:
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(select(MinerWhitelistORM)).all()
+            return [
+                MinerWhitelistEntry(
+                    hotkey=row.hotkey,
+                    label=row.label,
+                    energy_source=row.energy_source,
+                    notes=row.notes or "",
+                    approved_at=row.approved_at,
+                )
+                for row in rows
+            ]
+
+    def is_whitelisted(self, hotkey: str) -> bool:
+        with session_scope(self.session_factory) as session:
+            return session.get(MinerWhitelistORM, hotkey) is not None

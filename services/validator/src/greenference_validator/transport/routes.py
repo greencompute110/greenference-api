@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Header, HTTPException
 
 from greenference_persistence import get_metrics_store
-from greenference_protocol import NodeCapability, ProbeResult
+from greenference_protocol import MinerWhitelistEntry, NodeCapability, ProbeResult
 from greenference_validator.application.services import (
     InvalidProbeResultError,
     UnknownCapabilityError,
@@ -208,3 +208,39 @@ def check_registration(
     if entry is None:
         return {"registered": False, "hotkey": hotkey}
     return {"registered": True, **entry.model_dump(mode="json")}
+
+
+# --- Miner whitelist endpoints ---
+
+
+@router.get("/validator/v1/whitelist")
+def list_whitelist(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_admin_api_key(authorization, x_api_key)
+    return [e.model_dump(mode="json") for e in service.repository.list_whitelist()]
+
+
+@router.post("/validator/v1/whitelist", status_code=201)
+def add_to_whitelist(
+    payload: MinerWhitelistEntry,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_admin_api_key(authorization, x_api_key)
+    entry = service.repository.add_whitelist_entry(payload)
+    return entry.model_dump(mode="json")
+
+
+@router.delete("/validator/v1/whitelist/{hotkey}")
+def remove_from_whitelist(
+    hotkey: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_admin_api_key(authorization, x_api_key)
+    removed = service.repository.remove_whitelist_entry(hotkey)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"hotkey {hotkey} not in whitelist")
+    return {"removed": hotkey}

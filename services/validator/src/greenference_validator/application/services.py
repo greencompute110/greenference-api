@@ -127,6 +127,9 @@ class ValidatorService:
     def publish_weight_snapshot(self, netuid: int = 16) -> WeightSnapshot:
         scorecards: dict[str, ScoreCard] = {}
         for hotkey, capability in sorted(self.repository.list_capabilities().items()):
+            if validator_settings.whitelist_enabled and not self.repository.is_whitelisted(hotkey):
+                logger.info("skipping non-whitelisted miner %s", hotkey)
+                continue
             results = self.repository.list_results(hotkey)
             if not results:
                 continue

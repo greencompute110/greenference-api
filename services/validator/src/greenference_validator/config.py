@@ -9,6 +9,9 @@ class Settings(BaseModel):
     score_delta: float = Field(default=0.8, ge=0.0)  # utilization exponent
     rental_revenue_bonus_cap: float = Field(default=0.1, ge=0.0)
 
+    # Miner whitelist — when enabled, only whitelisted hotkeys receive weight
+    whitelist_enabled: bool = True
+
     # Flux orchestrator
     flux_inference_floor_pct: float = Field(default=0.20, ge=0.0, le=1.0)
     flux_rental_floor_pct: float = Field(default=0.10, ge=0.0, le=1.0)

@@ -471,6 +471,19 @@ class BusDeliveryORM(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+# --- Miner whitelist ---
+
+
+class MinerWhitelistORM(Base):
+    __tablename__ = "miner_whitelist"
+
+    hotkey: Mapped[str] = mapped_column(String(128), primary_key=True)
+    label: Mapped[str] = mapped_column(String(255), default="")
+    energy_source: Mapped[str] = mapped_column(String(128), default="")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 # --- Flux orchestrator ---
 
 
