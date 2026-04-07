@@ -14,7 +14,7 @@ from greenference_protocol.enums import WorkloadKind, SecurityTier
 def build_vllm_workload(
     model: str,
     name: str | None = None,
-    image: str = "vllm/vllm-openai:latest",
+    image: str = "vllm/vllm-openai:v0.7.3",
     concurrency: int = 8,
     max_model_len: int = 16384,
     **kwargs: object,
