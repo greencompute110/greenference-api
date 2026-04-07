@@ -200,7 +200,7 @@ class ControlPlaneService:
         return assignment
 
     def list_leases(self, hotkey: str) -> list[LeaseAssignment]:
-        return self.repository.list_assignments(hotkey, statuses=["assigned", "activating"])
+        return self.repository.list_assignments(hotkey, statuses=["assigned", "activating", "active"])
 
     def list_deployments(self) -> list[DeploymentRecord]:
         return self.repository.list_deployments()
