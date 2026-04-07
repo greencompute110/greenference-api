@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 from collections import Counter
 from datetime import UTC, datetime, timedelta
@@ -26,6 +27,8 @@ from greenference_control_plane.domain.metering import UsageAggregator
 from greenference_control_plane.domain.scheduler import PlacementPolicy
 from greenference_control_plane.domain.state import transition_state
 from greenference_control_plane.infrastructure.repository import ControlPlaneRepository
+
+logger = logging.getLogger(__name__)
 
 
 class ControlPlaneService:
@@ -138,23 +141,55 @@ class ControlPlaneService:
         return deployment
 
     def _assign_lease(self, workload: WorkloadSpec, deployment_id: str) -> LeaseAssignment | None:
+        all_nodes = self.repository.list_nodes()
         nodes = []
-        for node in self.repository.list_nodes():
+        skip_reasons: dict[str, list[str]] = {}
+        for node in all_nodes:
+            reasons: list[str] = []
             miner = self.repository.get_miner(node.hotkey)
             if miner is not None and miner.drained:
-                continue
+                reasons.append("drained")
             heartbeat = self.repository.get_heartbeat(node.hotkey)
             if heartbeat and not heartbeat.healthy:
-                continue
+                reasons.append("unhealthy")
             if self._is_node_stale(node):
-                continue
+                reasons.append("stale")
             if self._is_server_for_node_stale(node):
-                continue
+                reasons.append("server_stale")
             if self._is_node_in_cooldown(node.node_id):
+                reasons.append("cooldown")
+            if reasons:
+                skip_reasons[node.node_id] = reasons
                 continue
             nodes.append(node)
+        if not nodes:
+            logger.warning(
+                "no eligible nodes for deployment %s (workload=%s kind=%s gpu=%d vram=%d): "
+                "total_registered=%d skipped=%s",
+                deployment_id,
+                workload.workload_id,
+                workload.kind.value,
+                workload.requirements.gpu_count,
+                workload.requirements.min_vram_gb_per_gpu,
+                len(all_nodes),
+                skip_reasons or "none registered",
+            )
+        else:
+            logger.info(
+                "scheduling deployment %s: %d eligible nodes out of %d total",
+                deployment_id, len(nodes), len(all_nodes),
+            )
         assignment = self.placement_policy.assign_lease(workload, deployment_id, nodes)
         if assignment is None:
+            logger.warning(
+                "scheduler returned no match for deployment %s among %d eligible nodes "
+                "(workload kind=%s gpu=%d vram=%d cpu=%d mem=%d)",
+                deployment_id, len(nodes), workload.kind.value,
+                workload.requirements.gpu_count,
+                workload.requirements.min_vram_gb_per_gpu,
+                workload.requirements.cpu_cores,
+                workload.requirements.memory_gb,
+            )
             return None
         self.repository.adjust_node_capacity(
             assignment.hotkey,

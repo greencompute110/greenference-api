@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from greenference_protocol import LeaseAssignment, NodeCapability, WorkloadSpec
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -16,19 +19,31 @@ class PlacementPolicy:
         candidates: list[RankedNode] = []
         for node in nodes:
             if workload.kind.value not in node.labels.get("workload_kinds", workload.kind.value):
+                logger.debug("node %s: skip workload_kinds mismatch (need %s, has %s)",
+                             node.node_id, workload.kind.value, node.labels.get("workload_kinds"))
                 continue
             if node.available_gpus < workload.requirements.gpu_count:
+                logger.debug("node %s: skip gpu_count (need %d, has %d)",
+                             node.node_id, workload.requirements.gpu_count, node.available_gpus)
                 continue
             if node.vram_gb_per_gpu < workload.requirements.min_vram_gb_per_gpu:
+                logger.debug("node %s: skip vram (need %d, has %d)",
+                             node.node_id, workload.requirements.min_vram_gb_per_gpu, node.vram_gb_per_gpu)
                 continue
             if node.cpu_cores < workload.requirements.cpu_cores:
+                logger.debug("node %s: skip cpu (need %d, has %d)",
+                             node.node_id, workload.requirements.cpu_cores, node.cpu_cores)
                 continue
             if node.memory_gb < workload.requirements.memory_gb:
+                logger.debug("node %s: skip memory (need %d, has %d)",
+                             node.node_id, workload.requirements.memory_gb, node.memory_gb)
                 continue
             if (
                 workload.requirements.supported_gpu_models
                 and node.gpu_model not in workload.requirements.supported_gpu_models
             ):
+                logger.debug("node %s: skip gpu_model (need %s, has %s)",
+                             node.node_id, workload.requirements.supported_gpu_models, node.gpu_model)
                 continue
             cost_component = 1.0 / (1.0 + node.hourly_cost_usd)
             score = (
@@ -51,4 +66,3 @@ class PlacementPolicy:
             hotkey=selected.hotkey,
             node_id=selected.node_id,
         )
-

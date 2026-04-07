@@ -1,18 +1,39 @@
+import os
+
 from pydantic import BaseModel, Field
+
+
+def _env(name: str, default: str) -> str:
+    return os.getenv(name, default)
+
+
+def _int(name: str, default: int) -> int:
+    return int(os.getenv(name, str(default)))
 
 
 class Settings(BaseModel):
     service_name: str = "greenference-control-plane"
     netuid: int = Field(default=16, ge=0)
-    default_lease_ttl_seconds: int = Field(default=3600, ge=1)  # 1h for image pulls
-    miner_heartbeat_timeout_seconds: int = Field(default=30, ge=1)
-    node_inventory_timeout_seconds: int = Field(default=60, ge=1)
-    server_observed_timeout_seconds: int = Field(default=60, ge=1)
-    deployment_request_retry_limit: int = Field(default=3, ge=1)
-    deployment_request_retry_delay_seconds: int = Field(default=5, ge=1)
-    deployment_health_failure_threshold: int = Field(default=2, ge=1)
-    placement_failure_cooldown_seconds: int = Field(default=300, ge=1)
-    placement_failure_threshold: int = Field(default=2, ge=1)
+    default_lease_ttl_seconds: int = Field(default=3600, ge=1)
+    miner_heartbeat_timeout_seconds: int = Field(default=120, ge=1)
+    node_inventory_timeout_seconds: int = Field(default=300, ge=1)
+    server_observed_timeout_seconds: int = Field(default=300, ge=1)
+    deployment_request_retry_limit: int = Field(default=10, ge=1)
+    deployment_request_retry_delay_seconds: int = Field(default=10, ge=1)
+    deployment_health_failure_threshold: int = Field(default=3, ge=1)
+    placement_failure_cooldown_seconds: int = Field(default=120, ge=1)
+    placement_failure_threshold: int = Field(default=3, ge=1)
 
 
-settings = Settings()
+settings = Settings(
+    netuid=_int("GREENFERENCE_NETUID", 16),
+    default_lease_ttl_seconds=_int("GREENFERENCE_DEFAULT_LEASE_TTL_SECONDS", 3600),
+    miner_heartbeat_timeout_seconds=_int("GREENFERENCE_MINER_HEARTBEAT_TIMEOUT_SECONDS", 120),
+    node_inventory_timeout_seconds=_int("GREENFERENCE_NODE_INVENTORY_TIMEOUT_SECONDS", 300),
+    server_observed_timeout_seconds=_int("GREENFERENCE_SERVER_OBSERVED_TIMEOUT_SECONDS", 300),
+    deployment_request_retry_limit=_int("GREENFERENCE_DEPLOYMENT_REQUEST_RETRY_LIMIT", 10),
+    deployment_request_retry_delay_seconds=_int("GREENFERENCE_DEPLOYMENT_REQUEST_RETRY_DELAY_SECONDS", 10),
+    deployment_health_failure_threshold=_int("GREENFERENCE_DEPLOYMENT_HEALTH_FAILURE_THRESHOLD", 3),
+    placement_failure_cooldown_seconds=_int("GREENFERENCE_PLACEMENT_FAILURE_COOLDOWN_SECONDS", 120),
+    placement_failure_threshold=_int("GREENFERENCE_PLACEMENT_FAILURE_THRESHOLD", 3),
+)

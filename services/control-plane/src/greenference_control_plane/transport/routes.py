@@ -3,7 +3,7 @@ from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
 from greenference_persistence import get_metrics_store
-from greenference_protocol import CapacityUpdate, DeploymentStatusUpdate, Heartbeat, MinerRegistration
+from greenference_protocol import CapacityUpdate, DeploymentState, DeploymentStatusUpdate, Heartbeat, MinerRegistration
 from greenference_control_plane.application.services import service
 from greenference_control_plane.transport.security import require_admin_api_key, require_miner_request
 
@@ -536,6 +536,80 @@ def debug_fleet_orchestration(
 ) -> dict:
     require_admin_api_key(authorization, x_api_key)
     return service.fleet_orchestration_report()
+
+
+@router.get("/platform/v1/debug/scheduling")
+def debug_scheduling(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Show why scheduling might fail: nodes, staleness, pending events."""
+    require_admin_api_key(authorization, x_api_key)
+    from greenference_control_plane.config import settings as cp_settings
+    from datetime import UTC, datetime
+    now = datetime.now(UTC)
+    all_nodes = service.repository.list_nodes()
+    nodes_report = []
+    for node in all_nodes:
+        miner = service.repository.get_miner(node.hotkey)
+        heartbeat = service.repository.get_heartbeat(node.hotkey)
+        skip_reasons = []
+        if miner is not None and miner.drained:
+            skip_reasons.append("drained")
+        if heartbeat and not heartbeat.healthy:
+            skip_reasons.append("unhealthy_heartbeat")
+        if not heartbeat:
+            skip_reasons.append("no_heartbeat")
+        if service._is_node_stale(node):
+            age = None
+            if node.observed_at:
+                raw = node.observed_at
+                if isinstance(raw, str):
+                    from datetime import datetime as dt
+                    raw = dt.fromisoformat(raw.replace("Z", "+00:00"))
+                age = (now - raw).total_seconds()
+            skip_reasons.append(f"stale(age={age:.0f}s, max={cp_settings.node_inventory_timeout_seconds}s)" if age else "stale(no_observed_at)")
+        if service._is_server_for_node_stale(node):
+            skip_reasons.append("server_stale")
+        if service._is_node_in_cooldown(node.node_id):
+            skip_reasons.append("cooldown")
+        nodes_report.append({
+            "node_id": node.node_id,
+            "hotkey": node.hotkey,
+            "gpu_model": node.gpu_model,
+            "available_gpus": node.available_gpus,
+            "gpu_count": node.gpu_count,
+            "vram_gb_per_gpu": node.vram_gb_per_gpu,
+            "cpu_cores": node.cpu_cores,
+            "memory_gb": node.memory_gb,
+            "observed_at": str(node.observed_at) if node.observed_at else None,
+            "eligible": len(skip_reasons) == 0,
+            "skip_reasons": skip_reasons,
+        })
+    pending_events = service.bus.list_deliveries(
+        consumer="control-plane-worker",
+        subjects=["deployment.requested"],
+        statuses=["pending", "processing"],
+    )
+    pending_deployments = [
+        d.model_dump(mode="json")
+        for d in service.list_deployments()
+        if d.state in (DeploymentState.PENDING,)
+    ]
+    return {
+        "registered_nodes": len(all_nodes),
+        "eligible_nodes": sum(1 for n in nodes_report if n["eligible"]),
+        "nodes": nodes_report,
+        "pending_deployment_events": len(pending_events),
+        "pending_deployments": pending_deployments,
+        "config": {
+            "node_inventory_timeout_seconds": cp_settings.node_inventory_timeout_seconds,
+            "server_observed_timeout_seconds": cp_settings.server_observed_timeout_seconds,
+            "deployment_request_retry_limit": cp_settings.deployment_request_retry_limit,
+            "deployment_request_retry_delay_seconds": cp_settings.deployment_request_retry_delay_seconds,
+            "default_lease_ttl_seconds": cp_settings.default_lease_ttl_seconds,
+        },
+    }
 
 
 @router.get("/platform/v1/debug/status")
