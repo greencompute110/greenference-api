@@ -34,7 +34,7 @@ class HttpInferenceClient:
         miner_auth_secret: str | None = None,
     ) -> None:
         self.upstream_timeout_seconds = upstream_timeout_seconds or float(
-            os.getenv("GREENFERENCE_UPSTREAM_TIMEOUT_SECONDS", "10.0")
+            os.getenv("GREENFERENCE_UPSTREAM_TIMEOUT_SECONDS", "120.0")
         )
         self.health_timeout_seconds = health_timeout_seconds or float(
             os.getenv("GREENFERENCE_HEALTH_TIMEOUT_SECONDS", "2.0")
