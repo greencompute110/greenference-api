@@ -460,16 +460,23 @@ def create_workload(
             model,
             **{k: v for k, v in payload_data.items() if k not in ("template", "model")},
         )
+    elif template == "vllm-vision":
+        from greenference_gateway.domain.templates import build_vllm_vision_workload
+        model = payload_data.get("model")
+        if not model:
+            raise HTTPException(status_code=400, detail="model required for vllm-vision template")
+        request = build_vllm_vision_workload(
+            model,
+            **{k: v for k, v in payload_data.items() if k not in ("template", "model")},
+        )
     elif template == "diffusion":
         from greenference_gateway.domain.templates import build_diffusion_workload
         model = payload_data.get("model")
-        name = payload_data.get("name", model or "diffusion")
         if not model:
             raise HTTPException(status_code=400, detail="model required for diffusion template")
         request = build_diffusion_workload(
             model,
-            name,
-            **{k: v for k, v in payload_data.items() if k not in ("template", "model", "name")},
+            **{k: v for k, v in payload_data.items() if k not in ("template", "model")},
         )
     else:
         request = WorkloadCreateRequest(**payload_data)
