@@ -770,3 +770,28 @@ def platform_metrics(
         float(len(service.stuck_deployments_report())),
     )
     return metrics.snapshot()
+
+
+@router.get("/platform/v1/gpu-pool")
+def gpu_pool() -> list[dict]:
+    """Public endpoint: aggregated GPU availability for the rental page."""
+    from collections import defaultdict
+    all_nodes = service.repository.list_nodes()
+    buckets: dict[str, dict] = defaultdict(lambda: {
+        "gpu_model": "",
+        "vram_gb_per_gpu": 0,
+        "total_gpus": 0,
+        "available_gpus": 0,
+        "node_count": 0,
+    })
+    for node in all_nodes:
+        if service._is_node_stale(node):
+            continue
+        key = (node.gpu_model or "unknown").lower()
+        b = buckets[key]
+        b["gpu_model"] = node.gpu_model or "unknown"
+        b["vram_gb_per_gpu"] = max(b["vram_gb_per_gpu"], node.vram_gb_per_gpu or 0)
+        b["total_gpus"] += node.gpu_count or 0
+        b["available_gpus"] += node.available_gpus or 0
+        b["node_count"] += 1
+    return sorted(buckets.values(), key=lambda b: -b["available_gpus"])
