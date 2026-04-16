@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import BigInteger, JSON, Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -37,8 +37,7 @@ class UserORM(Base):
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
     website: Mapped[str | None] = mapped_column(String(255), nullable=True)
     profile_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
-    balance_tao: Mapped[float] = mapped_column(Float, default=0.0)
-    balance_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    balance_credits: Mapped[int] = mapped_column(BigInteger, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -514,6 +513,53 @@ class GreenEnergyAttachmentORM(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     data_b64: Mapped[str] = mapped_column(Text, default="")
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# --- Billing ---
+
+
+class LedgerEntryORM(Base):
+    __tablename__ = "ledger_entries"
+
+    entry_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    amount_cents: Mapped[int] = mapped_column(BigInteger)
+    balance_after: Mapped[int] = mapped_column(BigInteger)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    reference_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CryptoInvoiceORM(Base):
+    __tablename__ = "crypto_invoices"
+
+    invoice_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    currency: Mapped[str] = mapped_column(String(32))
+    amount_crypto: Mapped[float] = mapped_column(Float)
+    amount_usd: Mapped[float] = mapped_column(Float)
+    bonus_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    total_credits: Mapped[int] = mapped_column(BigInteger)
+    deposit_address: Mapped[str] = mapped_column(String(256))
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    tx_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class StripeSessionORM(Base):
+    __tablename__ = "stripe_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    stripe_session_id: Mapped[str] = mapped_column(String(256), unique=True)
+    amount_usd: Mapped[float] = mapped_column(Float)
+    amount_cents: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 # --- Flux orchestrator ---

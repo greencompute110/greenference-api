@@ -1,5 +1,5 @@
 import json
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from greenference_protocol import (
@@ -141,7 +141,11 @@ def get_user_balance(
     user = service.get_user(user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="user not found")
-    return {"user_id": user_id, "balance_tao": user.balance_tao, "balance_usd": user.balance_usd}
+    return {
+        "user_id": user_id,
+        "balance_credits": user.balance_credits,
+        "balance_usd": round(user.balance_credits / 100.0, 2),
+    }
 
 
 @router.patch("/platform/users/{user_id}")
@@ -1198,3 +1202,116 @@ def debug_build_failures(
 ) -> list[dict]:
     require_api_key(authorization, x_api_key, admin_required=True)
     return [build.model_dump(mode="json") for build in service.list_failed_builds()]
+
+
+# ---------------------------------------------------------------------------
+# Billing endpoints
+# ---------------------------------------------------------------------------
+
+
+def _get_billing():
+    from greenference_gateway.application.billing_service import get_billing_service
+    return get_billing_service()
+
+
+@router.get("/platform/billing/balance")
+def billing_balance(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    api_key = require_api_key(authorization, x_api_key)
+    if api_key.user_id is None:
+        raise HTTPException(status_code=403, detail="api key must be bound to a user")
+    return _get_billing().get_balance(api_key.user_id)
+
+
+@router.get("/platform/billing/ledger")
+def billing_ledger(
+    limit: int = 50,
+    offset: int = 0,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    api_key = require_api_key(authorization, x_api_key)
+    if api_key.user_id is None:
+        raise HTTPException(status_code=403, detail="api key must be bound to a user")
+    entries = _get_billing().list_ledger(api_key.user_id, limit=limit, offset=offset)
+    return [e.model_dump(mode="json") for e in entries]
+
+
+@router.post("/platform/billing/topup/stripe")
+def billing_topup_stripe(
+    payload: dict,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    api_key = require_api_key(authorization, x_api_key)
+    if api_key.user_id is None:
+        raise HTTPException(status_code=403, detail="api key must be bound to a user")
+    amount_usd = payload.get("amount_usd")
+    if not amount_usd or amount_usd < 1:
+        raise HTTPException(status_code=400, detail="amount_usd must be >= 1")
+    try:
+        return _get_billing().create_stripe_topup(api_key.user_id, float(amount_usd))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/platform/billing/topup/crypto")
+def billing_topup_crypto(
+    payload: dict,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    api_key = require_api_key(authorization, x_api_key)
+    if api_key.user_id is None:
+        raise HTTPException(status_code=403, detail="api key must be bound to a user")
+    currency = payload.get("currency", "").lower()
+    amount_usd = payload.get("amount_usd")
+    if currency not in ("usdt", "usdc", "tao", "alpha"):
+        raise HTTPException(status_code=400, detail="currency must be one of: usdt, usdc, tao, alpha")
+    if not amount_usd or amount_usd < 1:
+        raise HTTPException(status_code=400, detail="amount_usd must be >= 1")
+    return _get_billing().create_crypto_invoice(api_key.user_id, currency, float(amount_usd))
+
+
+@router.post("/platform/billing/webhook/stripe")
+async def billing_stripe_webhook(request: Request) -> dict:
+    """Stripe webhook — called by Stripe when a checkout session completes."""
+    from greenference_gateway.infrastructure.stripe_client import verify_webhook_signature
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    try:
+        event = verify_webhook_signature(payload, sig)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"webhook verification failed: {exc}") from exc
+    if event.get("type") == "checkout.session.completed":
+        session_data = event["data"]["object"]
+        stripe_session_id = session_data["id"]
+        _get_billing().confirm_stripe_payment(stripe_session_id)
+    return {"received": True}
+
+
+@router.post("/platform/billing/crypto/{invoice_id}/confirm")
+def billing_confirm_crypto(
+    invoice_id: str,
+    payload: dict,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Admin — confirm a crypto deposit."""
+    require_api_key(authorization, x_api_key, admin_required=True)
+    tx_hash = payload.get("tx_hash", "")
+    if not tx_hash:
+        raise HTTPException(status_code=400, detail="tx_hash required")
+    result = _get_billing().confirm_crypto_deposit(invoice_id, tx_hash)
+    if result is None:
+        raise HTTPException(status_code=404, detail="invoice not found")
+    return result
+
+
+@router.get("/platform/billing/bonus-rates")
+def billing_bonus_rates() -> dict:
+    """Public — returns the bonus rates for each payment method."""
+    from greenference_gateway.application.billing_service import BONUS_RATES
+    return {k: f"+{int(v*100)}%" for k, v in BONUS_RATES.items()}

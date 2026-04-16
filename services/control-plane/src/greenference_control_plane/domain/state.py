@@ -10,8 +10,9 @@ ALLOWED_TRANSITIONS: dict[DeploymentState, set[DeploymentState]] = {
     DeploymentState.SCHEDULED: {DeploymentState.PULLING, DeploymentState.STARTING, DeploymentState.READY, DeploymentState.FAILED, DeploymentState.TERMINATED},
     DeploymentState.PULLING: {DeploymentState.STARTING, DeploymentState.READY, DeploymentState.FAILED, DeploymentState.TERMINATED},
     DeploymentState.STARTING: {DeploymentState.READY, DeploymentState.FAILED, DeploymentState.TERMINATED},
-    DeploymentState.READY: {DeploymentState.DRAINING, DeploymentState.FAILED, DeploymentState.TERMINATED},
+    DeploymentState.READY: {DeploymentState.DRAINING, DeploymentState.SUSPENDED, DeploymentState.FAILED, DeploymentState.TERMINATED},
     DeploymentState.DRAINING: {DeploymentState.TERMINATED, DeploymentState.FAILED},
+    DeploymentState.SUSPENDED: {DeploymentState.READY, DeploymentState.TERMINATED},
     DeploymentState.FAILED: {DeploymentState.PENDING, DeploymentState.TERMINATED},
     DeploymentState.TERMINATED: set(),
 }

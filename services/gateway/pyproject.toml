@@ -10,6 +10,7 @@ dependencies = [
   "greenference-protocol",
   "greenference-control-plane",
   "greenference-builder",
+  "stripe>=8.0.0",
 ]
 
 [tool.uv.sources]
