@@ -1,7 +1,16 @@
-from fastapi import APIRouter, Header, HTTPException
+import base64
+
+from fastapi import APIRouter, Header, HTTPException, UploadFile, File, Form
+from fastapi.responses import Response
 
 from greenference_persistence import get_metrics_store
-from greenference_protocol import MinerWhitelistEntry, NodeCapability, ProbeResult
+from greenference_protocol import (
+    GreenEnergyApplication,
+    GreenEnergyAttachment,
+    MinerWhitelistEntry,
+    NodeCapability,
+    ProbeResult,
+)
 from greenference_validator.application.services import (
     InvalidProbeResultError,
     UnknownCapabilityError,
@@ -247,3 +256,128 @@ def remove_from_whitelist(
     if not removed:
         raise HTTPException(status_code=404, detail=f"hotkey {hotkey} not in whitelist")
     return {"removed": hotkey}
+
+
+# --- Green-energy applications (provider onboarding) ---
+
+
+@router.post("/validator/v1/applications", status_code=201)
+async def submit_application(
+    hotkey: str = Form(...),
+    signature: str = Form(""),
+    organization: str = Form(""),
+    energy_source: str = Form(""),
+    description: str = Form(""),
+    files: list[UploadFile] = File(default=[]),
+) -> dict:
+    """Public endpoint — providers submit green-energy proof here."""
+    if not hotkey.strip():
+        raise HTTPException(status_code=400, detail="hotkey is required")
+
+    app = GreenEnergyApplication(
+        hotkey=hotkey.strip(),
+        signature=signature,
+        organization=organization,
+        energy_source=energy_source,
+        description=description,
+    )
+    service.repository.create_application(app)
+
+    for f in files:
+        raw = await f.read()
+        att = GreenEnergyAttachment(
+            application_id=app.application_id,
+            filename=f.filename or "unnamed",
+            content_type=f.content_type or "application/octet-stream",
+            size_bytes=len(raw),
+            data_b64=base64.b64encode(raw).decode(),
+        )
+        service.repository.add_attachment(att)
+
+    return app.model_dump(mode="json")
+
+
+@router.get("/validator/v1/applications")
+def list_applications(
+    status: str | None = None,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    """Admin — list all applications, optionally filtered by status."""
+    require_admin_api_key(authorization, x_api_key)
+    apps = service.repository.list_applications(status=status)
+    result = []
+    for app in apps:
+        d = app.model_dump(mode="json")
+        atts = service.repository.list_attachments(app.application_id)
+        d["attachments"] = [
+            {
+                "attachment_id": a.attachment_id,
+                "filename": a.filename,
+                "content_type": a.content_type,
+                "size_bytes": a.size_bytes,
+            }
+            for a in atts
+        ]
+        result.append(d)
+    return result
+
+
+@router.get("/validator/v1/applications/{application_id}/attachments/{attachment_id}")
+def download_attachment(
+    application_id: str,
+    attachment_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> Response:
+    """Admin — download a specific attachment."""
+    require_admin_api_key(authorization, x_api_key)
+    att = service.repository.get_attachment(attachment_id)
+    if att is None or att.application_id != application_id:
+        raise HTTPException(status_code=404, detail="attachment not found")
+    raw = base64.b64decode(att.data_b64)
+    return Response(
+        content=raw,
+        media_type=att.content_type,
+        headers={"Content-Disposition": f'attachment; filename="{att.filename}"'},
+    )
+
+
+@router.post("/validator/v1/applications/{application_id}/approve")
+def approve_application(
+    application_id: str,
+    reviewer_notes: str = "",
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Admin — approve application and auto-add hotkey to whitelist."""
+    require_admin_api_key(authorization, x_api_key)
+    app = service.repository.update_application_status(application_id, "approved", reviewer_notes)
+    if app is None:
+        raise HTTPException(status_code=404, detail="application not found")
+
+    # Auto-add to whitelist
+    entry = MinerWhitelistEntry(
+        hotkey=app.hotkey,
+        label=app.organization or app.hotkey[:16],
+        energy_source=app.energy_source,
+        notes=f"Auto-approved from application {application_id}",
+    )
+    service.repository.add_whitelist_entry(entry)
+
+    return {"status": "approved", "hotkey": app.hotkey, "application_id": application_id}
+
+
+@router.post("/validator/v1/applications/{application_id}/reject")
+def reject_application(
+    application_id: str,
+    reviewer_notes: str = "",
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Admin — reject an application."""
+    require_admin_api_key(authorization, x_api_key)
+    app = service.repository.update_application_status(application_id, "rejected", reviewer_notes)
+    if app is None:
+        raise HTTPException(status_code=404, detail="application not found")
+    return {"status": "rejected", "application_id": application_id}

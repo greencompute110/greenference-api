@@ -486,6 +486,36 @@ class MinerWhitelistORM(Base):
     approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+# --- Green-energy applications ---
+
+
+class GreenEnergyApplicationORM(Base):
+    __tablename__ = "green_energy_applications"
+
+    application_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    hotkey: Mapped[str] = mapped_column(String(128), index=True)
+    signature: Mapped[str] = mapped_column(Text, default="")
+    organization: Mapped[str] = mapped_column(String(255), default="")
+    energy_source: Mapped[str] = mapped_column(String(128), default="")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    reviewer_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class GreenEnergyAttachmentORM(Base):
+    __tablename__ = "green_energy_attachments"
+
+    attachment_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    application_id: Mapped[str] = mapped_column(String(64), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(128), default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    data_b64: Mapped[str] = mapped_column(Text, default="")
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 # --- Flux orchestrator ---
 
 

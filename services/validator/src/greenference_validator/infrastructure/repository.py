@@ -5,6 +5,8 @@ from sqlalchemy import select
 from greenference_persistence import create_db_engine, create_session_factory, init_database, session_scope
 from greenference_persistence.db import needs_bootstrap
 from greenference_persistence.orm import (
+    GreenEnergyApplicationORM,
+    GreenEnergyAttachmentORM,
     MinerWhitelistORM,
     ProbeChallengeORM,
     ProbeResultORM,
@@ -12,7 +14,16 @@ from greenference_persistence.orm import (
     ValidatorCapabilityORM,
     WeightSnapshotORM,
 )
-from greenference_protocol import MinerWhitelistEntry, NodeCapability, ProbeChallenge, ProbeResult, ScoreCard, WeightSnapshot
+from greenference_protocol import (
+    GreenEnergyApplication,
+    GreenEnergyAttachment,
+    MinerWhitelistEntry,
+    NodeCapability,
+    ProbeChallenge,
+    ProbeResult,
+    ScoreCard,
+    WeightSnapshot,
+)
 
 
 class ValidatorRepository:
@@ -241,3 +252,101 @@ class ValidatorRepository:
     def is_whitelisted(self, hotkey: str) -> bool:
         with session_scope(self.session_factory) as session:
             return session.get(MinerWhitelistORM, hotkey) is not None
+
+    # --- Green-energy applications ---
+
+    def _app_from_orm(self, row: GreenEnergyApplicationORM) -> GreenEnergyApplication:
+        return GreenEnergyApplication(
+            application_id=row.application_id,
+            hotkey=row.hotkey,
+            signature=row.signature,
+            organization=row.organization,
+            energy_source=row.energy_source,
+            description=row.description or "",
+            status=row.status,
+            reviewer_notes=row.reviewer_notes or "",
+            submitted_at=row.submitted_at,
+            reviewed_at=row.reviewed_at,
+        )
+
+    def _attachment_from_orm(self, row: GreenEnergyAttachmentORM) -> GreenEnergyAttachment:
+        return GreenEnergyAttachment(
+            attachment_id=row.attachment_id,
+            application_id=row.application_id,
+            filename=row.filename,
+            content_type=row.content_type,
+            size_bytes=row.size_bytes,
+            data_b64=row.data_b64,
+            uploaded_at=row.uploaded_at,
+        )
+
+    def create_application(self, app: GreenEnergyApplication) -> GreenEnergyApplication:
+        with session_scope(self.session_factory) as session:
+            row = GreenEnergyApplicationORM(
+                application_id=app.application_id,
+                hotkey=app.hotkey,
+                signature=app.signature,
+                organization=app.organization,
+                energy_source=app.energy_source,
+                description=app.description,
+                status=app.status,
+                submitted_at=app.submitted_at,
+            )
+            session.add(row)
+        return app
+
+    def add_attachment(self, att: GreenEnergyAttachment) -> GreenEnergyAttachment:
+        with session_scope(self.session_factory) as session:
+            row = GreenEnergyAttachmentORM(
+                attachment_id=att.attachment_id,
+                application_id=att.application_id,
+                filename=att.filename,
+                content_type=att.content_type,
+                size_bytes=att.size_bytes,
+                data_b64=att.data_b64,
+                uploaded_at=att.uploaded_at,
+            )
+            session.add(row)
+        return att
+
+    def list_applications(self, status: str | None = None) -> list[GreenEnergyApplication]:
+        with session_scope(self.session_factory) as session:
+            q = select(GreenEnergyApplicationORM).order_by(GreenEnergyApplicationORM.submitted_at.desc())
+            if status:
+                q = q.where(GreenEnergyApplicationORM.status == status)
+            rows = session.scalars(q).all()
+            return [self._app_from_orm(r) for r in rows]
+
+    def get_application(self, application_id: str) -> GreenEnergyApplication | None:
+        with session_scope(self.session_factory) as session:
+            row = session.get(GreenEnergyApplicationORM, application_id)
+            return self._app_from_orm(row) if row else None
+
+    def list_attachments(self, application_id: str) -> list[GreenEnergyAttachment]:
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(
+                select(GreenEnergyAttachmentORM).where(
+                    GreenEnergyAttachmentORM.application_id == application_id
+                )
+            ).all()
+            return [self._attachment_from_orm(r) for r in rows]
+
+    def get_attachment(self, attachment_id: str) -> GreenEnergyAttachment | None:
+        with session_scope(self.session_factory) as session:
+            row = session.get(GreenEnergyAttachmentORM, attachment_id)
+            return self._attachment_from_orm(row) if row else None
+
+    def update_application_status(
+        self, application_id: str, status: str, reviewer_notes: str = ""
+    ) -> GreenEnergyApplication | None:
+        from datetime import UTC, datetime
+
+        with session_scope(self.session_factory) as session:
+            row = session.get(GreenEnergyApplicationORM, application_id)
+            if row is None:
+                return None
+            row.status = status
+            row.reviewer_notes = reviewer_notes
+            row.reviewed_at = datetime.now(UTC)
+            session.add(row)
+            return self._app_from_orm(row)
