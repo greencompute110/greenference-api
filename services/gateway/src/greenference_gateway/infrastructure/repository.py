@@ -38,6 +38,15 @@ class GatewayRepository:
             row = session.get(UserORM, user_id)
             return self._to_user(row) if row else None
 
+    def get_user_by_email(self, email: str) -> UserRecord | None:
+        if not email:
+            return None
+        with session_scope(self.session_factory) as session:
+            row = session.scalars(
+                select(UserORM).where(UserORM.email == email).limit(1)
+            ).first()
+            return self._to_user(row) if row else None
+
     def list_users(self) -> list[UserRecord]:
         with session_scope(self.session_factory) as session:
             rows = session.scalars(select(UserORM)).all()

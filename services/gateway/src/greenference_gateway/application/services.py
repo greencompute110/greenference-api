@@ -70,6 +70,14 @@ class GatewayService:
         self._round_robin_counter = 0
 
     def register_user(self, request: UserRegistrationRequest) -> UserRecord:
+        # Idempotent: if a user with this email already exists, return it.
+        # The UI's provisionGreenfKey flow retries registration on every new
+        # OAuth signup, and email collisions would otherwise 500 out — which
+        # breaks the sign-in flow via the JWT callback.
+        if request.email:
+            existing = self.repository.get_user_by_email(request.email)
+            if existing is not None:
+                return existing
         user = UserRecord(username=request.username, email=request.email)
         return self.repository.save_user(user)
 
