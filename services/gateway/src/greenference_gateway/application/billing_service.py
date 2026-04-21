@@ -15,7 +15,7 @@ BONUS_RATES: dict[str, float] = {
     "usdt": 0.05,
     "usdc": 0.05,
     "tao": 0.10,
-    "alpha": 0.20,
+    "alpha": 0.10,
 }
 
 
