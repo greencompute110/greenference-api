@@ -40,6 +40,14 @@ async def _control_plane_worker_loop() -> None:
                 try:
                     service.meter_usage()
                 except Exception as meter_exc:
+                    # Log loudly — the outer try/except wrapper clears
+                    # `last_error` on every successful iteration, so without
+                    # the log a metering regression would otherwise be
+                    # invisible.
+                    import logging
+                    logging.getLogger(__name__).exception(
+                        "metering cycle failed: %s", meter_exc
+                    )
                     _worker_state["last_error"] = f"metering: {meter_exc}"
             _worker_state["last_successful_iteration"] = asyncio.get_running_loop().time()
             _worker_state["last_error"] = None

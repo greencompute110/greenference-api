@@ -90,7 +90,10 @@ services:
       GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
       GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "1.0"
       GREENFERENCE_NETUID: "16"
-      PYTHONPATH: /app/protocol/src:/app/api/packages/persistence/src:/app/api/services/control-plane/src
+      # Include gateway/src so `meter_usage` can import BillingRepository —
+      # rental metering is owned by the gateway's billing module but fired
+      # from the control-plane worker loop.
+      PYTHONPATH: /app/protocol/src:/app/api/packages/persistence/src:/app/api/services/control-plane/src:/app/api/services/gateway/src
     depends_on:
       migrate:
         condition: service_completed_successfully
