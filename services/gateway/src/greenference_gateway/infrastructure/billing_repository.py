@@ -146,6 +146,48 @@ class BillingRepository:
             ).all()
             return [self._to_crypto_invoice(r) for r in rows]
 
+    def list_all_crypto_invoices_for_admin(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Admin view — list every invoice joined with the user row so the
+        admin knows *who* this deposit is for without a second round-trip.
+        Returns plain dicts (not the CryptoInvoice model) because we want
+        the user email/username alongside each row.
+        """
+        with session_scope(self.session_factory) as session:
+            stmt = (
+                select(CryptoInvoiceORM, UserORM)
+                .join(UserORM, UserORM.user_id == CryptoInvoiceORM.user_id)
+                .order_by(CryptoInvoiceORM.created_at.desc())
+                .limit(limit)
+            )
+            if status:
+                stmt = stmt.where(CryptoInvoiceORM.status == status)
+            out: list[dict] = []
+            for inv, user in session.execute(stmt).all():
+                out.append({
+                    "invoice_id": inv.invoice_id,
+                    "user_id": inv.user_id,
+                    "username": user.username,
+                    "email": user.email,
+                    "display_name": user.display_name,
+                    "currency": inv.currency,
+                    "amount_crypto": inv.amount_crypto,
+                    "amount_usd": inv.amount_usd,
+                    "bonus_pct": inv.bonus_pct,
+                    "total_credits": inv.total_credits,
+                    "deposit_address": inv.deposit_address,
+                    "status": inv.status,
+                    "tx_hash": inv.tx_hash,
+                    "created_at": inv.created_at.isoformat() if inv.created_at else None,
+                    "expires_at": inv.expires_at.isoformat() if inv.expires_at else None,
+                    "confirmed_at": inv.confirmed_at.isoformat() if inv.confirmed_at else None,
+                })
+            return out
+
     # --- Stripe sessions ---
 
     def create_stripe_session(self, ss: StripeSession) -> StripeSession:

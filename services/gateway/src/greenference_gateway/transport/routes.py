@@ -1394,6 +1394,23 @@ def billing_confirm_crypto(
     return result
 
 
+@router.get("/platform/billing/admin/crypto/invoices")
+def billing_admin_list_crypto_invoices(
+    status: str | None = None,
+    limit: int = 100,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    """Admin — list crypto invoices (optionally filtered by status) with the
+    user's email/username joined in so the admin can tell who each deposit
+    is for at a glance. Used by the admin billing UI."""
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return _get_billing().repo.list_all_crypto_invoices_for_admin(
+        status=status,
+        limit=max(1, min(limit, 500)),
+    )
+
+
 @router.get("/platform/billing/bonus-rates")
 def billing_bonus_rates() -> dict:
     """Public — returns the bonus rates for each payment method."""
