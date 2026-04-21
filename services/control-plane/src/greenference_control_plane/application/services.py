@@ -243,6 +243,8 @@ class ControlPlaneService:
         deployment.endpoint = update.endpoint or deployment.endpoint
         if update.ssh_private_key:
             deployment.ssh_private_key = update.ssh_private_key
+        if update.port_mappings is not None:
+            deployment.port_mappings = update.port_mappings
         deployment.last_error = update.error
         deployment.failure_class = self._classify_deployment_failure(update.error, update.state, deployment.failure_class)
         if update.state == DeploymentState.READY:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from contextlib import contextmanager
 
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -31,6 +31,33 @@ def init_database(engine: Engine) -> None:
         Base.metadata.create_all(engine, checkfirst=True)
     except OperationalError as exc:
         if "already exists" not in str(exc).lower():
+            raise
+    # Best-effort additive migrations for existing deployments. create_all does
+    # not add columns to pre-existing tables, so handle the handful of columns
+    # we added after initial bootstrap. Safe to run on every start.
+    _additive_migrations(engine)
+
+
+def _additive_migrations(engine: Engine) -> None:
+    dialect = engine.dialect.name
+    statements: list[str] = []
+    if dialect == "postgresql":
+        statements.append(
+            "ALTER TABLE deployments ADD COLUMN IF NOT EXISTS port_mappings JSON DEFAULT '{}'::json"
+        )
+    elif dialect == "sqlite":
+        # SQLite lacks IF NOT EXISTS on ADD COLUMN; we probe and ignore duplicate errors.
+        statements.append(
+            "ALTER TABLE deployments ADD COLUMN port_mappings JSON DEFAULT '{}'"
+        )
+    for stmt in statements:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(stmt))
+        except OperationalError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" in msg or "already exists" in msg:
+                continue
             raise
 
 
