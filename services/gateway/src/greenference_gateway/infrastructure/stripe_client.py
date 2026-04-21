@@ -8,19 +8,33 @@ log = logging.getLogger(__name__)
 
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_SUCCESS_URL = os.environ.get("STRIPE_SUCCESS_URL", "https://greenference.ai/billing?status=success")
-STRIPE_CANCEL_URL = os.environ.get("STRIPE_CANCEL_URL", "https://greenference.ai/billing?status=cancelled")
+STRIPE_SUCCESS_URL = os.environ.get("STRIPE_SUCCESS_URL", "https://green-compute.com/billing?status=success")
+STRIPE_CANCEL_URL = os.environ.get("STRIPE_CANCEL_URL", "https://green-compute.com/billing?status=cancelled")
+
+
+class StripeNotConfiguredError(RuntimeError):
+    """Raised when Stripe is called but the API key isn't set.
+
+    The gateway handler catches this and surfaces a 503 rather than a 500
+    so the missing-configuration cause is obvious in logs and in the UI.
+    """
 
 
 def _get_stripe():
-    """Lazy import to avoid hard dependency when Stripe is not configured."""
+    """Lazy import + configuration guard. Only call if you intend to hit Stripe."""
     try:
         import stripe
-        if STRIPE_SECRET_KEY:
-            stripe.api_key = STRIPE_SECRET_KEY
-        return stripe
-    except ImportError:
-        raise RuntimeError("stripe package not installed — run: pip install stripe")
+    except ImportError as exc:
+        raise RuntimeError(
+            "stripe package not installed — ensure docker-compose pip install includes 'stripe'"
+        ) from exc
+    if not STRIPE_SECRET_KEY:
+        raise StripeNotConfiguredError(
+            "STRIPE_SECRET_KEY is not set. Add it to infra/production/.env and "
+            "restart the gateway container."
+        )
+    stripe.api_key = STRIPE_SECRET_KEY
+    return stripe
 
 
 def create_checkout_session(amount_cents: int, user_id: str) -> tuple[str, str]:
