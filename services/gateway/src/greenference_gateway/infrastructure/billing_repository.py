@@ -137,6 +137,23 @@ class BillingRepository:
             session.add(row)
             return self._to_crypto_invoice(row)
 
+    def reject_crypto_invoice(self, invoice_id: str) -> CryptoInvoice | None:
+        """Admin action: mark invoice as rejected and never credit it.
+
+        Idempotent — rejecting a rejected invoice is a no-op. Rejecting a
+        confirmed invoice returns None (can't undo a credited invoice here;
+        use admin debit if you need to claw back funds).
+        """
+        with session_scope(self.session_factory) as session:
+            row = session.get(CryptoInvoiceORM, invoice_id)
+            if row is None:
+                return None
+            if row.status == "confirmed":
+                return None
+            row.status = "rejected"
+            session.add(row)
+            return self._to_crypto_invoice(row)
+
     def report_invoice_tx_hash(
         self,
         invoice_id: str,

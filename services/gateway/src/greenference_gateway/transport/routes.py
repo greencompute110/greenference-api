@@ -1427,6 +1427,29 @@ def billing_confirm_crypto(
     return result
 
 
+@router.post("/platform/billing/crypto/{invoice_id}/reject")
+def billing_reject_crypto(
+    invoice_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Admin — reject a crypto invoice. Does NOT credit the user. Marks
+    status as 'rejected' so it drops out of the pending queue. Idempotent.
+    Rejecting a confirmed invoice returns 409 — use admin debit to reverse
+    that flow instead.
+    """
+    require_api_key(authorization, x_api_key, admin_required=True)
+    result = _get_billing().repo.reject_crypto_invoice(invoice_id)
+    if result is None:
+        # Either doesn't exist or already confirmed — both look like 409/404.
+        # Using 404 for simplicity; admin can refresh to see current state.
+        raise HTTPException(
+            status_code=404,
+            detail="invoice not found or already confirmed",
+        )
+    return {"rejected": True, "invoice_id": result.invoice_id}
+
+
 @router.get("/platform/billing/admin/crypto/invoices")
 def billing_admin_list_crypto_invoices(
     status: str | None = None,
