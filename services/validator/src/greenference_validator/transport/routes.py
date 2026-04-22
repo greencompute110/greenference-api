@@ -5,9 +5,11 @@ from fastapi.responses import Response
 
 from greenference_persistence import get_metrics_store
 from greenference_protocol import (
+    CatalogSubmission,
     GreenEnergyApplication,
     GreenEnergyAttachment,
     MinerWhitelistEntry,
+    ModelCatalogEntry,
     NodeCapability,
     ProbeResult,
 )
@@ -399,3 +401,226 @@ def reject_application(
     if app is None:
         raise HTTPException(status_code=404, detail="application not found")
     return {"status": "rejected", "application_id": application_id}
+
+
+# --- Model catalog — Chutes-style shared inference pool ---
+
+import re
+
+
+_MODEL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,126}[a-z0-9]$")
+
+
+def _validate_model_id(model_id: str) -> str:
+    """Normalize + sanity-check. Catalog IDs are URL-safe slugs."""
+    normalized = model_id.strip().lower()
+    if not _MODEL_ID_RE.match(normalized):
+        raise HTTPException(
+            status_code=400,
+            detail="model_id must be lowercase alphanumeric with dashes/dots (2–128 chars)",
+        )
+    return normalized
+
+
+def _ensure_catalog_workload(entry: ModelCatalogEntry) -> None:
+    """Auto-create or update the canonical WorkloadORM for a catalog entry.
+
+    Keyed by workload.name == model_id. Multiple miners host this single
+    workload by each creating their own DeploymentRecord pointing at it.
+    The workload carries `metadata.managed_by = "flux"` so billing /
+    idle-kill paths can distinguish catalog replicas from user-spun
+    private endpoints.
+    """
+    # Direct DB access — validator and control-plane share the same Postgres;
+    # we don't need a cross-service call for a single upsert.
+    from sqlalchemy import select as _select
+    from greenference_persistence import session_scope as _session_scope
+    from greenference_persistence.orm import WorkloadORM
+
+    repo = service.repository
+    # vLLM-compatible default image. Miners override via the catalog template
+    # if they need diffusion / vision variants.
+    default_images = {
+        "vllm": "vllm/vllm-openai:v0.8.5",
+        "vllm-vision": "vllm/vllm-openai:v0.8.5",
+        "diffusion": "greenference/diffusion-server:latest",
+    }
+    image = default_images.get(entry.template, default_images["vllm"])
+
+    requirements = {
+        "gpu_count": entry.gpu_count,
+        "min_vram_gb_per_gpu": entry.min_vram_gb_per_gpu,
+        "cpu_cores": 4,
+        "memory_gb": 16,
+        "storage_gb": 200,
+        "supported_gpu_models": [],
+    }
+    runtime = {
+        "template": entry.template,
+        "model_identifier": entry.hf_repo or entry.model_id,
+        "max_model_len": entry.max_model_len,
+    }
+    metadata_json = {
+        "managed_by": "flux",
+        "catalog_model_id": entry.model_id,
+    }
+
+    with _session_scope(repo.session_factory) as session:
+        row = session.scalar(
+            _select(WorkloadORM).where(WorkloadORM.name == entry.model_id)
+        )
+        if row is None:
+            row = WorkloadORM(
+                workload_id=f"catalog-{entry.model_id}",
+                owner_user_id=None,
+                name=entry.model_id,
+                image=image,
+                display_name=entry.display_name or entry.model_id,
+                tags=["catalog"],
+                workload_alias=entry.model_id,
+                kind="inference",
+                security_tier="standard",
+                pricing_class="standard",
+                requirements=requirements,
+                runtime=runtime,
+                lifecycle={},
+                public=(entry.visibility == "public"),
+                metadata_json=metadata_json,
+            )
+        else:
+            row.display_name = entry.display_name or entry.model_id
+            row.image = image
+            row.requirements = requirements
+            row.runtime = runtime
+            row.public = (entry.visibility == "public")
+            row.metadata_json = metadata_json
+        session.add(row)
+
+
+@router.post("/validator/v1/catalog", status_code=201)
+def upsert_catalog_entry(
+    payload: ModelCatalogEntry,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Admin — directly upsert a catalog entry (bypass submission flow)."""
+    require_admin_api_key(authorization, x_api_key)
+    payload.model_id = _validate_model_id(payload.model_id)
+    service.repository.upsert_catalog_entry(payload)
+    _ensure_catalog_workload(payload)
+    return payload.model_dump(mode="json")
+
+
+@router.get("/validator/v1/catalog")
+def list_catalog(visibility: str | None = None) -> list[dict]:
+    """Public — list catalog entries (optionally filter by visibility)."""
+    entries = service.repository.list_catalog_entries(visibility=visibility)
+    return [e.model_dump(mode="json") for e in entries]
+
+
+@router.get("/validator/v1/catalog/{model_id}")
+def get_catalog_entry(model_id: str) -> dict:
+    """Public — fetch a single catalog entry."""
+    entry = service.repository.get_catalog_entry(model_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="catalog entry not found")
+    return entry.model_dump(mode="json")
+
+
+@router.delete("/validator/v1/catalog/{model_id}")
+def delete_catalog_entry(
+    model_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Admin — remove a catalog entry. Also drops the canonical workload
+    (miners stop hosting it on the next Flux rebalance cycle)."""
+    require_admin_api_key(authorization, x_api_key)
+    removed = service.repository.delete_catalog_entry(model_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="catalog entry not found")
+    # Best-effort workload cleanup.
+    try:
+        from sqlalchemy import delete as _delete
+        from greenference_persistence import session_scope as _session_scope
+        from greenference_persistence.orm import WorkloadORM
+
+        with _session_scope(service.repository.session_factory) as session:
+            session.execute(_delete(WorkloadORM).where(WorkloadORM.name == model_id))
+    except Exception:
+        pass
+    return {"deleted": True, "model_id": model_id}
+
+
+@router.post("/validator/v1/catalog/submissions", status_code=201)
+def submit_catalog(payload: CatalogSubmission) -> dict:
+    """Public — a miner (or anyone) proposes a model for the catalog.
+    Admin review required; approval triggers catalog-entry + workload creation.
+    """
+    payload.model_id = _validate_model_id(payload.model_id)
+    service.repository.create_catalog_submission(payload)
+    return payload.model_dump(mode="json")
+
+
+@router.get("/validator/v1/catalog/submissions")
+def list_catalog_submissions(
+    status: str | None = None,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    """Admin — list catalog submissions, optionally filtered by status."""
+    require_admin_api_key(authorization, x_api_key)
+    subs = service.repository.list_catalog_submissions(status=status)
+    return [s.model_dump(mode="json") for s in subs]
+
+
+@router.post("/validator/v1/catalog/submissions/{submission_id}/approve")
+def approve_catalog_submission(
+    submission_id: str,
+    reviewer_notes: str = "",
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Admin — approve a submission. Auto-creates the canonical catalog
+    entry and its workload; Flux picks it up on the next rebalance cycle."""
+    require_admin_api_key(authorization, x_api_key)
+    sub = service.repository.update_catalog_submission_status(
+        submission_id, "approved", reviewer_notes
+    )
+    if sub is None:
+        raise HTTPException(status_code=404, detail="submission not found")
+    entry = ModelCatalogEntry(
+        model_id=sub.model_id,
+        display_name=sub.display_name or sub.model_id,
+        hf_repo=sub.hf_repo,
+        template=sub.template,
+        min_vram_gb_per_gpu=sub.min_vram_gb_per_gpu,
+        gpu_count=sub.gpu_count,
+        max_model_len=sub.max_model_len,
+        visibility="public",
+        created_by_hotkey=sub.hotkey or None,
+    )
+    service.repository.upsert_catalog_entry(entry)
+    _ensure_catalog_workload(entry)
+    return {
+        "status": "approved",
+        "submission_id": submission_id,
+        "model_id": sub.model_id,
+    }
+
+
+@router.post("/validator/v1/catalog/submissions/{submission_id}/reject")
+def reject_catalog_submission(
+    submission_id: str,
+    reviewer_notes: str = "",
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Admin — reject a catalog submission."""
+    require_admin_api_key(authorization, x_api_key)
+    sub = service.repository.update_catalog_submission_status(
+        submission_id, "rejected", reviewer_notes
+    )
+    if sub is None:
+        raise HTTPException(status_code=404, detail="submission not found")
+    return {"status": "rejected", "submission_id": submission_id}

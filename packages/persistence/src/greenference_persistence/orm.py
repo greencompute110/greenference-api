@@ -518,6 +518,48 @@ class GreenEnergyAttachmentORM(Base):
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ModelCatalogORM(Base):
+    """Admin-approved model that the inference pool hosts."""
+
+    __tablename__ = "model_catalog"
+
+    model_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(255), default="")
+    hf_repo: Mapped[str] = mapped_column(String(255), default="")
+    template: Mapped[str] = mapped_column(String(32), default="vllm")
+    min_vram_gb_per_gpu: Mapped[int] = mapped_column(Integer, default=24)
+    gpu_count: Mapped[int] = mapped_column(Integer, default=1)
+    max_model_len: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    visibility: Mapped[str] = mapped_column(String(16), default="public", index=True)
+    min_replicas: Mapped[int] = mapped_column(Integer, default=1)
+    max_replicas: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    admin_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_hotkey: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CatalogSubmissionORM(Base):
+    """Miner-proposed catalog addition; admin approves/rejects."""
+
+    __tablename__ = "model_catalog_submissions"
+
+    submission_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model_id: Mapped[str] = mapped_column(String(128), index=True)
+    hotkey: Mapped[str] = mapped_column(String(128), index=True, default="")
+    signature: Mapped[str] = mapped_column(Text, default="")
+    display_name: Mapped[str] = mapped_column(String(255), default="")
+    hf_repo: Mapped[str] = mapped_column(String(255), default="")
+    template: Mapped[str] = mapped_column(String(32), default="vllm")
+    min_vram_gb_per_gpu: Mapped[int] = mapped_column(Integer, default=24)
+    gpu_count: Mapped[int] = mapped_column(Integer, default=1)
+    max_model_len: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    reviewer_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 # --- Billing ---
 
 

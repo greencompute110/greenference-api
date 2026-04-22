@@ -5,9 +5,11 @@ from sqlalchemy import select
 from greenference_persistence import create_db_engine, create_session_factory, init_database, session_scope
 from greenference_persistence.db import needs_bootstrap
 from greenference_persistence.orm import (
+    CatalogSubmissionORM,
     GreenEnergyApplicationORM,
     GreenEnergyAttachmentORM,
     MinerWhitelistORM,
+    ModelCatalogORM,
     ProbeChallengeORM,
     ProbeResultORM,
     ScoreCardORM,
@@ -15,9 +17,11 @@ from greenference_persistence.orm import (
     WeightSnapshotORM,
 )
 from greenference_protocol import (
+    CatalogSubmission,
     GreenEnergyApplication,
     GreenEnergyAttachment,
     MinerWhitelistEntry,
+    ModelCatalogEntry,
     NodeCapability,
     ProbeChallenge,
     ProbeResult,
@@ -359,3 +363,133 @@ class ValidatorRepository:
             row.reviewed_at = datetime.now(UTC)
             session.add(row)
             return self._app_from_orm(row)
+
+    # ------------------------------------------------------------------
+    # Model catalog + submissions — Chutes-style shared inference pool
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _catalog_from_orm(row: ModelCatalogORM) -> ModelCatalogEntry:
+        return ModelCatalogEntry(
+            model_id=row.model_id,
+            display_name=row.display_name or "",
+            hf_repo=row.hf_repo or "",
+            template=row.template or "vllm",
+            min_vram_gb_per_gpu=row.min_vram_gb_per_gpu or 24,
+            gpu_count=row.gpu_count or 1,
+            max_model_len=row.max_model_len,
+            visibility=row.visibility or "public",
+            min_replicas=row.min_replicas if row.min_replicas is not None else 1,
+            max_replicas=row.max_replicas,
+            admin_notes=row.admin_notes or "",
+            created_by_hotkey=row.created_by_hotkey,
+            created_at=row.created_at,
+        )
+
+    @staticmethod
+    def _submission_from_orm(row: CatalogSubmissionORM) -> CatalogSubmission:
+        return CatalogSubmission(
+            submission_id=row.submission_id,
+            model_id=row.model_id,
+            hotkey=row.hotkey or "",
+            signature=row.signature or "",
+            display_name=row.display_name or "",
+            hf_repo=row.hf_repo or "",
+            template=row.template or "vllm",
+            min_vram_gb_per_gpu=row.min_vram_gb_per_gpu or 24,
+            gpu_count=row.gpu_count or 1,
+            max_model_len=row.max_model_len,
+            rationale=row.rationale or "",
+            status=row.status or "pending",
+            reviewer_notes=row.reviewer_notes or "",
+            submitted_at=row.submitted_at,
+            reviewed_at=row.reviewed_at,
+        )
+
+    def upsert_catalog_entry(self, entry: ModelCatalogEntry) -> ModelCatalogEntry:
+        with session_scope(self.session_factory) as session:
+            row = session.get(ModelCatalogORM, entry.model_id)
+            if row is None:
+                row = ModelCatalogORM(model_id=entry.model_id)
+            row.display_name = entry.display_name
+            row.hf_repo = entry.hf_repo
+            row.template = entry.template
+            row.min_vram_gb_per_gpu = entry.min_vram_gb_per_gpu
+            row.gpu_count = entry.gpu_count
+            row.max_model_len = entry.max_model_len
+            row.visibility = entry.visibility
+            row.min_replicas = entry.min_replicas
+            row.max_replicas = entry.max_replicas
+            row.admin_notes = entry.admin_notes
+            row.created_by_hotkey = entry.created_by_hotkey
+            session.add(row)
+        return entry
+
+    def get_catalog_entry(self, model_id: str) -> ModelCatalogEntry | None:
+        with session_scope(self.session_factory) as session:
+            row = session.get(ModelCatalogORM, model_id)
+            return self._catalog_from_orm(row) if row else None
+
+    def list_catalog_entries(self, visibility: str | None = None) -> list[ModelCatalogEntry]:
+        with session_scope(self.session_factory) as session:
+            q = select(ModelCatalogORM).order_by(ModelCatalogORM.created_at.desc())
+            if visibility:
+                q = q.where(ModelCatalogORM.visibility == visibility)
+            rows = session.scalars(q).all()
+            return [self._catalog_from_orm(r) for r in rows]
+
+    def delete_catalog_entry(self, model_id: str) -> bool:
+        with session_scope(self.session_factory) as session:
+            row = session.get(ModelCatalogORM, model_id)
+            if row is None:
+                return False
+            session.delete(row)
+            return True
+
+    def create_catalog_submission(self, sub: CatalogSubmission) -> CatalogSubmission:
+        with session_scope(self.session_factory) as session:
+            row = CatalogSubmissionORM(
+                submission_id=sub.submission_id,
+                model_id=sub.model_id,
+                hotkey=sub.hotkey,
+                signature=sub.signature,
+                display_name=sub.display_name,
+                hf_repo=sub.hf_repo,
+                template=sub.template,
+                min_vram_gb_per_gpu=sub.min_vram_gb_per_gpu,
+                gpu_count=sub.gpu_count,
+                max_model_len=sub.max_model_len,
+                rationale=sub.rationale,
+                status=sub.status,
+                submitted_at=sub.submitted_at,
+            )
+            session.add(row)
+        return sub
+
+    def get_catalog_submission(self, submission_id: str) -> CatalogSubmission | None:
+        with session_scope(self.session_factory) as session:
+            row = session.get(CatalogSubmissionORM, submission_id)
+            return self._submission_from_orm(row) if row else None
+
+    def list_catalog_submissions(self, status: str | None = None) -> list[CatalogSubmission]:
+        with session_scope(self.session_factory) as session:
+            q = select(CatalogSubmissionORM).order_by(CatalogSubmissionORM.submitted_at.desc())
+            if status:
+                q = q.where(CatalogSubmissionORM.status == status)
+            rows = session.scalars(q).all()
+            return [self._submission_from_orm(r) for r in rows]
+
+    def update_catalog_submission_status(
+        self, submission_id: str, status: str, reviewer_notes: str = ""
+    ) -> CatalogSubmission | None:
+        from datetime import UTC, datetime
+
+        with session_scope(self.session_factory) as session:
+            row = session.get(CatalogSubmissionORM, submission_id)
+            if row is None:
+                return None
+            row.status = status
+            row.reviewer_notes = reviewer_notes
+            row.reviewed_at = datetime.now(UTC)
+            session.add(row)
+            return self._submission_from_orm(row)
