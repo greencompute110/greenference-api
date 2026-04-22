@@ -642,6 +642,7 @@ class GatewayService:
                     model=request.model,
                     prompt_tokens=response.usage.prompt_tokens,
                     completion_tokens=response.usage.completion_tokens,
+                    deployment=deployment,
                 )
             self._record_invocation(
                 deployment,
@@ -717,6 +718,7 @@ class GatewayService:
                     model=request.model,
                     prompt_tokens=int(stream_usage.get("prompt_tokens", 0) or 0),
                     completion_tokens=int(stream_usage.get("completion_tokens", 0) or 0),
+                    deployment=deployment,
                 )
             self.metrics.observe("invoke.latency_ms", (perf_counter() - started) * 1000.0)
             self._record_invocation(
@@ -940,8 +942,10 @@ class GatewayService:
         model: str,
         prompt_tokens: int,
         completion_tokens: int,
+        deployment: DeploymentRecord | None = None,
     ) -> None:
-        """Debit a user's balance for one chat-completion call.
+        """Debit a user's balance for one chat-completion call + accrue the
+        serving miner's payout.
 
         Uses the shared `inference_cost_cents` helper so the UI's estimate
         matches the actual charge. Failures (insufficient balance, user
@@ -956,8 +960,9 @@ class GatewayService:
         )
 
         cents = inference_cost_cents(prompt_tokens, completion_tokens)
+        billing = BillingRepository()
         try:
-            BillingRepository().debit_user(
+            billing.debit_user(
                 user_id=user_id,
                 amount_cents=cents,
                 kind="inference",
@@ -972,8 +977,29 @@ class GatewayService:
             # response — record it to a metric and move on. Subsequent
             # requests will be blocked by the pre-flight gate.
             self.metrics.increment("inference.debit.insufficient_balance")
+            return
         except Exception:
             self.metrics.increment("inference.debit.failed")
+            return
+
+        # Debit succeeded → accrue the miner's cut. Accrual captures the
+        # full revenue for now; payout split + on-chain transfer is a later
+        # admin job (see plan §2E out-of-scope notes).
+        if deployment and deployment.hotkey:
+            try:
+                billing.accrue_miner_payout(
+                    hotkey=deployment.hotkey,
+                    deployment_id=deployment.deployment_id,
+                    workload_id=deployment.workload_id,
+                    request_id=reference_id,
+                    model=model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    cents_earned=cents,
+                )
+                self.metrics.increment("inference.accrual.recorded")
+            except Exception:
+                self.metrics.increment("inference.accrual.failed")
 
     def _record_invocation(
         self,

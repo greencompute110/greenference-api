@@ -10,6 +10,7 @@ from greenference_persistence.db import needs_bootstrap
 from greenference_persistence.orm import (
     CryptoInvoiceORM,
     LedgerEntryORM,
+    MinerPayoutAccrualORM,
     StripeSessionORM,
     UserORM,
 )
@@ -104,6 +105,37 @@ class BillingRepository:
             )
             rows = session.scalars(stmt).all()
             return [self._to_ledger_entry(r) for r in rows]
+
+    # --- Miner payout accrual (Phase 2E) ---
+
+    def accrue_miner_payout(
+        self,
+        *,
+        hotkey: str,
+        deployment_id: str,
+        workload_id: str,
+        request_id: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cents_earned: int,
+    ) -> None:
+        """Capture one row per billable inference request. Idempotent via
+        request_id unique constraint — retries from the gateway won't
+        double-credit the miner."""
+        with session_scope(self.session_factory) as session:
+            session.add(MinerPayoutAccrualORM(
+                accrual_id=str(uuid4()),
+                hotkey=hotkey,
+                deployment_id=deployment_id,
+                workload_id=workload_id,
+                request_id=request_id,
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cents_earned=cents_earned,
+                created_at=datetime.now(UTC),
+            ))
 
     # --- Crypto invoices ---
 

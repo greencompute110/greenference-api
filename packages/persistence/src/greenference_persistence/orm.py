@@ -560,6 +560,25 @@ class CatalogSubmissionORM(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class MinerPayoutAccrualORM(Base):
+    """One row per billable inference request. Captures what the miner
+    earned for serving the call; aggregation + on-chain payout is a later
+    admin job."""
+
+    __tablename__ = "miner_payout_accrual"
+
+    accrual_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    hotkey: Mapped[str] = mapped_column(String(128), index=True)
+    deployment_id: Mapped[str] = mapped_column(String(64), index=True)
+    workload_id: Mapped[str] = mapped_column(String(64), index=True)
+    request_id: Mapped[str] = mapped_column(String(64), unique=True)
+    model: Mapped[str] = mapped_column(String(128), default="")
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cents_earned: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 # --- Billing ---
 
 
