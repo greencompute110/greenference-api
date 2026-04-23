@@ -1,4 +1,4 @@
-# greenference-api
+# greencompute-api
 
 Validator-side services for the Green Compute subnet. Three production services share one Postgres:
 
@@ -46,7 +46,7 @@ Full architecture + setup docs: [../README.md](../README.md).
 
 ## audit endpoints (public, no auth)
 
-For independent verifiers running [`greenference-audit`](../greenference-audit):
+For independent verifiers running [`greencompute-audit`](../greencompute-audit):
 
 | Endpoint | Returns |
 |---|---|
@@ -93,14 +93,14 @@ Current head: `20260424_0040_audit_tables` (scorecard history + audit reports + 
 ## testing
 
 ```bash
-cd greenference-api
+cd greencompute-api
 pytest                         # full suite
 pytest tests/gateway -k chat   # focused: chat completion routing
 ```
 
 ## config
 
-All services read env vars; defaults live in [`services/{name}/src/greenference_{name}/config.py`](services/validator/src/greenference_validator/config.py). Highlights:
+All services read env vars; defaults live in [`services/{name}/src/greencompute_{name}/config.py`](services/validator/src/greencompute_validator/config.py). Highlights:
 
 - `GREENFERENCE_ADMIN_API_KEY` — bootstraps the admin API key that gates admin routes (also falls back as the inference canary auth key).
 - `GREENFERENCE_BITTENSOR_ENABLED` / `_NETWORK` / `_NETUID` / `_WALLET_PATH` — on-chain integration. Network + netuid pairs: `("test", 16)` for testnet, `("finney", 110)` for mainnet. When enabled, validator publishes weights + audit commitments.

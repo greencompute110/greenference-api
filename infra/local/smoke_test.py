@@ -14,9 +14,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT.parent / "greenference" / "protocol" / "src"))
+sys.path.insert(0, str(ROOT.parent / "greencompute" / "protocol" / "src"))
 
-from greenference_protocol import NodeCapability, ProbeResult  # noqa: E402
+from greencompute_protocol import NodeCapability, ProbeResult  # noqa: E402
 
 GATEWAY_URL = os.getenv("GREENFERENCE_GATEWAY_URL", "http://127.0.0.1:28000")
 CONTROL_PLANE_URL = os.getenv("GREENFERENCE_CONTROL_PLANE_URL", "http://127.0.0.1:28001")
@@ -29,14 +29,14 @@ NATS_MONITOR_URL = os.getenv("GREENFERENCE_NATS_MONITOR_URL", "http://127.0.0.1:
 TIMEOUT_SECONDS = float(os.getenv("GREENFERENCE_STACK_TIMEOUT_SECONDS", "60"))
 MINER_HOTKEY = os.getenv("GREENFERENCE_MINER_HOTKEY", "miner-local")
 MINER_NODE_ID = os.getenv("GREENFERENCE_MINER_NODE_ID", "node-local")
-MINER_AUTH_SECRET = os.getenv("GREENFERENCE_MINER_AUTH_SECRET", "greenference-miner-local-secret")
+MINER_AUTH_SECRET = os.getenv("GREENFERENCE_MINER_AUTH_SECRET", "greencompute-miner-local-secret")
 FAILOVER_MINER_HOTKEY = os.getenv("GREENFERENCE_FAILOVER_MINER_HOTKEY", "miner-failover")
 FAILOVER_MINER_NODE_ID = os.getenv("GREENFERENCE_FAILOVER_MINER_NODE_ID", "node-failover")
 FAILOVER_MINER_AUTH_SECRET = os.getenv(
     "GREENFERENCE_FAILOVER_MINER_AUTH_SECRET",
-    "greenference-miner-failover-secret",
+    "greencompute-miner-failover-secret",
 )
-COMPOSE_FILE = os.getenv("GREENFERENCE_DOCKER_COMPOSE_FILE", "greenference-api/infra/local/docker-compose.yml")
+COMPOSE_FILE = os.getenv("GREENFERENCE_DOCKER_COMPOSE_FILE", "greencompute-api/infra/local/docker-compose.yml")
 RESTART_SERVICES = tuple(
     part.strip()
     for part in os.getenv("GREENFERENCE_STACK_RESTART_SERVICES", "control-plane,builder,miner-agent").split(",")
@@ -499,15 +499,15 @@ def _assert_metrics(headers: dict[str, str], deployment_id: str, *, require_cont
     gateway_prometheus = _request_text("GET", f"{GATEWAY_URL}/_metrics")
     control_plane_prometheus = _request_text("GET", f"{CONTROL_PLANE_URL}/_metrics")
     validator_prometheus = _request_text("GET", f"{VALIDATOR_URL}/_metrics")
-    if gateway_metrics.get("invoke.success", 0) < 1 and "greenference_invoke_success" not in gateway_prometheus:
+    if gateway_metrics.get("invoke.success", 0) < 1 and "greencompute_invoke_success" not in gateway_prometheus:
         raise RuntimeError("gateway invoke.success metric did not increment")
     if (
         require_control_plane_counters
         and control_plane_metrics.get("deployment.scheduled", 0) < 1
-        and "greenference_deployment_scheduled" not in control_plane_prometheus
+        and "greencompute_deployment_scheduled" not in control_plane_prometheus
     ):
         raise RuntimeError("control-plane deployment.scheduled metric did not increment")
-    if validator_metrics.get("weights.published", 0) < 1 and "greenference_weights_published" not in validator_prometheus:
+    if validator_metrics.get("weights.published", 0) < 1 and "greencompute_weights_published" not in validator_prometheus:
         raise RuntimeError("validator weights.published metric did not increment")
     deployment_events = _request_json(
         "GET",
@@ -520,10 +520,10 @@ def _assert_metrics(headers: dict[str, str], deployment_id: str, *, require_cont
 
 def _assert_operational_surfaces(headers: dict[str, str]) -> None:
     for base_url, expected_metric in [
-        (GATEWAY_URL, "greenference_invoke_success"),
-        (CONTROL_PLANE_URL, "greenference_deployment_scheduled"),
-        (BUILDER_URL, "greenference_build_published"),
-        (VALIDATOR_URL, "greenference_weights_published"),
+        (GATEWAY_URL, "greencompute_invoke_success"),
+        (CONTROL_PLANE_URL, "greencompute_deployment_scheduled"),
+        (BUILDER_URL, "greencompute_build_published"),
+        (VALIDATOR_URL, "greencompute_weights_published"),
     ]:
         body = _request_text("GET", f"{base_url}/_metrics")
         if expected_metric not in body:

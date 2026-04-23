@@ -1,12 +1,12 @@
 import pytest
 
-from greenference_protocol import NodeCapability, ProbeResult
-from greenference_validator.application.services import (
+from greencompute_protocol import NodeCapability, ProbeResult
+from greencompute_validator.application.services import (
     InvalidProbeResultError,
     UnknownProbeChallengeError,
     ValidatorService,
 )
-from greenference_validator.infrastructure.repository import ValidatorRepository
+from greencompute_validator.infrastructure.repository import ValidatorRepository
 
 
 def test_probe_results_produce_weights_and_reject_invalid_submissions():

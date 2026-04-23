@@ -1,5 +1,5 @@
-from greenference_protocol import NodeCapability, WorkloadCreateRequest, WorkloadSpec
-from greenference_control_plane.domain.scheduler import PlacementPolicy
+from greencompute_protocol import NodeCapability, WorkloadCreateRequest, WorkloadSpec
+from greencompute_control_plane.domain.scheduler import PlacementPolicy
 
 
 def test_scheduler_prefers_health_reliability_and_fit():

@@ -1,10 +1,10 @@
-from greenference_gateway.application.services import GatewayService
-from greenference_gateway.infrastructure.repository import GatewayRepository
-from greenference_control_plane.application.services import ControlPlaneService
-from greenference_control_plane.infrastructure.repository import ControlPlaneRepository
-from greenference_builder.application.services import BuilderService
-from greenference_builder.infrastructure.repository import BuilderRepository
-from greenference_protocol import (
+from greencompute_gateway.application.services import GatewayService
+from greencompute_gateway.infrastructure.repository import GatewayRepository
+from greencompute_control_plane.application.services import ControlPlaneService
+from greencompute_control_plane.infrastructure.repository import ControlPlaneRepository
+from greencompute_builder.application.services import BuilderService
+from greencompute_builder.infrastructure.repository import BuilderRepository
+from greencompute_protocol import (
     APIKeyCreateRequest,
     BuildRequest,
     DeploymentUpdateRequest,

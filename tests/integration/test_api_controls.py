@@ -1,18 +1,18 @@
 import pytest
 from fastapi import HTTPException
 
-from greenference_builder.application.services import BuilderService
-from greenference_builder.infrastructure.repository import BuilderRepository
-from greenference_control_plane.application.services import ControlPlaneService
-from greenference_control_plane.infrastructure.repository import ControlPlaneRepository
-from greenference_control_plane.transport import routes as control_plane_routes
-from greenference_control_plane.transport import security as control_plane_security
-from greenference_gateway.application.services import GatewayService
-from greenference_gateway.infrastructure.repository import GatewayRepository
-from greenference_gateway.transport import routes as gateway_routes
-from greenference_gateway.transport import security as gateway_security
-from greenference_persistence import CredentialStore, FixedWindowRateLimiter, WorkflowEventRepository
-from greenference_protocol import (
+from greencompute_builder.application.services import BuilderService
+from greencompute_builder.infrastructure.repository import BuilderRepository
+from greencompute_control_plane.application.services import ControlPlaneService
+from greencompute_control_plane.infrastructure.repository import ControlPlaneRepository
+from greencompute_control_plane.transport import routes as control_plane_routes
+from greencompute_control_plane.transport import security as control_plane_security
+from greencompute_gateway.application.services import GatewayService
+from greencompute_gateway.infrastructure.repository import GatewayRepository
+from greencompute_gateway.transport import routes as gateway_routes
+from greencompute_gateway.transport import security as gateway_security
+from greencompute_persistence import CredentialStore, FixedWindowRateLimiter, WorkflowEventRepository
+from greencompute_protocol import (
     APIKeyCreateRequest,
     BuildRequest,
     CapacityUpdate,
@@ -29,10 +29,10 @@ from greenference_protocol import (
     WorkloadSpec,
     sign_payload,
 )
-from greenference_validator.application.services import ValidatorService
-from greenference_validator.infrastructure.repository import ValidatorRepository
-from greenference_validator.transport import routes as validator_routes
-from greenference_validator.transport import security as validator_security
+from greencompute_validator.application.services import ValidatorService
+from greencompute_validator.infrastructure.repository import ValidatorRepository
+from greencompute_validator.transport import routes as validator_routes
+from greencompute_validator.transport import security as validator_security
 
 
 def _seed_keys(repository: GatewayRepository) -> tuple[str, str]:
@@ -180,7 +180,7 @@ def test_gateway_admin_routes_expose_build_and_invocation_history(
     assert build_record["artifact_digest"] is not None
     assert build_context["normalized_context_uri"] == "s3://ctx.zip"
     assert build_context["staged_context_uri"] == (
-        f"s3://greenference-build-artifacts/contexts/{build['build_id']}/context.tar.gz"
+        f"s3://greencompute-build-artifacts/contexts/{build['build_id']}/context.tar.gz"
     )
     assert build_record["registry_manifest_uri"] == f"{build_record['artifact_uri']}@{build_record['artifact_digest']}"
     assert build_record["executor_name"] == "simulated-buildkit"

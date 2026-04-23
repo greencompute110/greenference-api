@@ -1,5 +1,5 @@
-from greenference_protocol import UsageRecord
-from greenference_control_plane.domain.metering import UsageAggregator
+from greencompute_protocol import UsageRecord
+from greencompute_control_plane.domain.metering import UsageAggregator
 
 
 def test_metering_aggregates_usage_by_deployment():

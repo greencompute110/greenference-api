@@ -1,7 +1,7 @@
-from greenference_persistence import SubjectBus, WorkflowEventRepository
-from greenference_protocol import NodeCapability, ProbeResult
-from greenference_validator.application.services import ValidatorService
-from greenference_validator.infrastructure.repository import ValidatorRepository
+from greencompute_persistence import SubjectBus, WorkflowEventRepository
+from greencompute_protocol import NodeCapability, ProbeResult
+from greencompute_validator.application.services import ValidatorService
+from greencompute_validator.infrastructure.repository import ValidatorRepository
 
 
 def test_validator_worker_acks_deliveries_once() -> None:

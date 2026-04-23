@@ -21,7 +21,7 @@ OLD_DEFAULT = (
     '{"runtime_kind":"hf-causal-lm","model_identifier":"sshleifer/tiny-gpt2"}'
 )
 NEW_DEFAULT = (
-    '{"runtime_kind":"local-cpu-textgen","model_identifier":"greenference-local-cpu-textgen"}'
+    '{"runtime_kind":"local-cpu-textgen","model_identifier":"greencompute-local-cpu-textgen"}'
 )
 
 

@@ -1,7 +1,7 @@
 import pytest
 
-from greenference_protocol import DeploymentState
-from greenference_control_plane.domain.state import InvalidDeploymentTransition, transition_state
+from greencompute_protocol import DeploymentState
+from greencompute_control_plane.domain.state import InvalidDeploymentTransition, transition_state
 
 
 def test_state_machine_allows_ready_path():

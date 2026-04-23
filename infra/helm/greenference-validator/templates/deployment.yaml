@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: greenference-validator
+  name: greencompute-validator
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: greenference-validator
+      app: greencompute-validator
   template:
     metadata:
       labels:
-        app: greenference-validator
+        app: greencompute-validator
     spec:
       containers:
         - name: validator

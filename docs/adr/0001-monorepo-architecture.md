@@ -16,8 +16,8 @@ full rewrite.
 Greenference uses a Python-first split that mirrors the upstream references:
 
 - `greenference` for shared protocol and SDK
-- `greenference-api` for gateway, control-plane, validator, and builder
-- `greenference-miner` for miner-side services and infra
+- `greencompute-api` for gateway, control-plane, validator, and builder
+- `greencompute-miner` for miner-side services and infra
 
 Within each top-level project, code follows the same structure:
 

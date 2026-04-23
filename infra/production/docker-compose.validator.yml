@@ -2,6 +2,10 @@ services:
   postgres:
     image: postgres:16
     environment:
+      # NOTE: Postgres DB + user stay `greenference` for data-compat.
+      # The subnet is rebranded to Green Compute, but renaming a live DB
+      # requires `CREATE DATABASE greencompute` + pg_dump+restore — done
+      # separately, not here.
       POSTGRES_DB: greenference
       POSTGRES_USER: greenference
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-greenference123}
@@ -21,10 +25,10 @@ services:
     working_dir: /app/api
     volumes:
       - ../../:/app/api
-      - ${PROTOCOL_DIR:-../../../greenference/protocol}:/app/protocol
+      - ${PROTOCOL_DIR:-../../../greencompute/protocol}:/app/protocol
     environment:
-      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
-      GREENFERENCE_DB_BOOTSTRAP: "false"
+      GREENCOMPUTE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
+      GREENCOMPUTE_DB_BOOTSTRAP: "false"
       PYTHONPATH: /app/protocol/src:/app/api/packages/persistence/src:/app/api/services/control-plane/src:/app/api/services/validator/src
     depends_on:
       postgres:
@@ -38,13 +42,13 @@ services:
     working_dir: /app/api
     volumes:
       - ../../:/app/api
-      - ${PROTOCOL_DIR:-../../../greenference/protocol}:/app/protocol
+      - ${PROTOCOL_DIR:-../../../greencompute/protocol}:/app/protocol
     environment:
-      GREENFERENCE_CORS_ALLOW_ORIGINS: ${GREENFERENCE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
-      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
-      GREENFERENCE_DB_BOOTSTRAP: "false"
-      GREENFERENCE_ADMIN_API_KEY: ${ADMIN_API_KEY:-}
-      GREENFERENCE_BUS_TRANSPORT: durable
+      GREENCOMPUTE_CORS_ALLOW_ORIGINS: ${GREENCOMPUTE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      GREENCOMPUTE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
+      GREENCOMPUTE_DB_BOOTSTRAP: "false"
+      GREENCOMPUTE_ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      GREENCOMPUTE_BUS_TRANSPORT: durable
       # Stripe
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
@@ -66,7 +70,7 @@ services:
         condition: service_completed_successfully
     command: >
       sh -lc "pip install -q psycopg[binary] sqlalchemy fastapi uvicorn pydantic nats-py stripe requests &&
-      uvicorn greenference_gateway.main:app --host 0.0.0.0 --port 8000 --log-level info"
+      uvicorn greencompute_gateway.main:app --host 0.0.0.0 --port 8000 --log-level info"
     ports:
       - "28000:8000"
     healthcheck:
@@ -81,15 +85,15 @@ services:
     working_dir: /app/api
     volumes:
       - ../../:/app/api
-      - ${PROTOCOL_DIR:-../../../greenference/protocol}:/app/protocol
+      - ${PROTOCOL_DIR:-../../../greencompute/protocol}:/app/protocol
     environment:
-      GREENFERENCE_CORS_ALLOW_ORIGINS: ${GREENFERENCE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
-      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
-      GREENFERENCE_DB_BOOTSTRAP: "false"
-      GREENFERENCE_ADMIN_API_KEY: ${ADMIN_API_KEY:-}
-      GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
-      GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "1.0"
-      GREENFERENCE_NETUID: "16"
+      GREENCOMPUTE_CORS_ALLOW_ORIGINS: ${GREENCOMPUTE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      GREENCOMPUTE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
+      GREENCOMPUTE_DB_BOOTSTRAP: "false"
+      GREENCOMPUTE_ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      GREENCOMPUTE_ENABLE_BACKGROUND_WORKERS: "true"
+      GREENCOMPUTE_WORKER_POLL_INTERVAL_SECONDS: "1.0"
+      GREENCOMPUTE_NETUID: "16"
       # Include gateway/src so `meter_usage` can import BillingRepository —
       # rental metering is owned by the gateway's billing module but fired
       # from the control-plane worker loop.
@@ -99,7 +103,7 @@ services:
         condition: service_completed_successfully
     command: >
       sh -lc "pip install -q psycopg[binary] sqlalchemy fastapi uvicorn pydantic substrate-interface &&
-      uvicorn greenference_control_plane.main:app --host 0.0.0.0 --port 8001 --log-level info"
+      uvicorn greencompute_control_plane.main:app --host 0.0.0.0 --port 8001 --log-level info"
     ports:
       - "28001:8001"
     healthcheck:
@@ -114,27 +118,27 @@ services:
     working_dir: /app/api
     volumes:
       - ../../:/app/api
-      - ${PROTOCOL_DIR:-../../../greenference/protocol}:/app/protocol
+      - ${PROTOCOL_DIR:-../../../greencompute/protocol}:/app/protocol
       - ${BITTENSOR_WALLET_DIR:-~/.bittensor}:/root/.bittensor:ro
     environment:
-      GREENFERENCE_CORS_ALLOW_ORIGINS: ${GREENFERENCE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
-      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
-      GREENFERENCE_DB_BOOTSTRAP: "false"
-      GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
-      GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "1.0"
-      GREENFERENCE_WHITELIST_ENABLED: ${WHITELIST_ENABLED:-true}
+      GREENCOMPUTE_CORS_ALLOW_ORIGINS: ${GREENCOMPUTE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      GREENCOMPUTE_DATABASE_URL: postgresql+psycopg://greenference:${POSTGRES_PASSWORD:-greenference123}@postgres:5432/greenference
+      GREENCOMPUTE_DB_BOOTSTRAP: "false"
+      GREENCOMPUTE_ENABLE_BACKGROUND_WORKERS: "true"
+      GREENCOMPUTE_WORKER_POLL_INTERVAL_SECONDS: "1.0"
+      GREENCOMPUTE_WHITELIST_ENABLED: ${WHITELIST_ENABLED:-true}
       # Bittensor
-      GREENFERENCE_BITTENSOR_ENABLED: ${BITTENSOR_ENABLED:-false}
-      GREENFERENCE_BITTENSOR_NETWORK: ${BITTENSOR_NETWORK:-test}
-      GREENFERENCE_BITTENSOR_NETUID: ${BITTENSOR_NETUID:-16}
-      GREENFERENCE_BITTENSOR_WALLET_PATH: ${BITTENSOR_WALLET_PATH:-}
+      GREENCOMPUTE_BITTENSOR_ENABLED: ${BITTENSOR_ENABLED:-false}
+      GREENCOMPUTE_BITTENSOR_NETWORK: ${BITTENSOR_NETWORK:-test}
+      GREENCOMPUTE_BITTENSOR_NETUID: ${BITTENSOR_NETUID:-16}
+      GREENCOMPUTE_BITTENSOR_WALLET_PATH: ${BITTENSOR_WALLET_PATH:-}
       # Flux orchestrator
-      GREENFERENCE_FLUX_INFERENCE_FLOOR_PCT: ${FLUX_INFERENCE_FLOOR_PCT:-20}
-      GREENFERENCE_FLUX_RENTAL_FLOOR_PCT: ${FLUX_RENTAL_FLOOR_PCT:-10}
-      GREENFERENCE_FLUX_REBALANCE_INTERVAL_SECONDS: ${FLUX_REBALANCE_INTERVAL_SECONDS:-60}
+      GREENCOMPUTE_FLUX_INFERENCE_FLOOR_PCT: ${FLUX_INFERENCE_FLOOR_PCT:-20}
+      GREENCOMPUTE_FLUX_RENTAL_FLOOR_PCT: ${FLUX_RENTAL_FLOOR_PCT:-10}
+      GREENCOMPUTE_FLUX_REBALANCE_INTERVAL_SECONDS: ${FLUX_REBALANCE_INTERVAL_SECONDS:-60}
       # Scoring
-      GREENFERENCE_SCORE_DELTA: ${SCORE_DELTA:-0.8}
-      GREENFERENCE_RENTAL_REVENUE_BONUS_CAP: ${RENTAL_REVENUE_BONUS_CAP:-0.1}
+      GREENCOMPUTE_SCORE_DELTA: ${SCORE_DELTA:-0.8}
+      GREENCOMPUTE_RENTAL_REVENUE_BONUS_CAP: ${RENTAL_REVENUE_BONUS_CAP:-0.1}
       PYTHONPATH: /app/protocol/src:/app/api/packages/persistence/src:/app/api/services/control-plane/src:/app/api/services/validator/src
     depends_on:
       migrate:
@@ -143,7 +147,7 @@ services:
         condition: service_healthy
     command: >
       sh -lc "pip install -q psycopg[binary] sqlalchemy fastapi uvicorn pydantic python-multipart substrate-interface bittensor &&
-      uvicorn greenference_validator.main:app --host 0.0.0.0 --port 8002 --log-level info"
+      uvicorn greencompute_validator.main:app --host 0.0.0.0 --port 8002 --log-level info"
     ports:
       - "28002:8002"
     healthcheck:

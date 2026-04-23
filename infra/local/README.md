@@ -20,7 +20,7 @@ This stack brings up the Greenference V1 control plane and two bootstrap miners:
 Run the stack:
 
 ```bash
-docker compose -f greenference-api/infra/local/docker-compose.yml up -d
+docker compose -f greencompute-api/infra/local/docker-compose.yml up -d
 ```
 
 The migration job runs first and the service containers only start after `alembic upgrade head` succeeds.
@@ -56,7 +56,7 @@ GREENFERENCE_LOCAL_GATEWAY_PORT=38000 \
 GREENFERENCE_LOCAL_CONTROL_PLANE_PORT=38001 \
 GREENFERENCE_LOCAL_POSTGRES_PORT=25432 \
 GREENFERENCE_LOCAL_REDIS_PORT=26379 \
-docker compose -f greenference-api/infra/local/docker-compose.yml up -d
+docker compose -f greencompute-api/infra/local/docker-compose.yml up -d
 ```
 
 ## Health Checks
@@ -82,7 +82,7 @@ Service ports:
 After the stack is healthy, run:
 
 ```bash
-python greenference-api/infra/local/smoke_test.py
+python greencompute-api/infra/local/smoke_test.py
 ```
 
 The smoke test waits for service readiness, verifies that `builder`, `control-plane`, and `validator` are running with `bus_transport=nats`, and also requires `builder` to report `build_execution_mode=live`. It then registers a user and admin API key, publishes a validator capability for the bootstrap miner, and validates:
@@ -99,7 +99,7 @@ The smoke test waits for service readiness, verifies that `builder`, `control-pl
 To validate failover behavior against the running compose stack:
 
 ```bash
-python greenference-api/infra/local/smoke_test.py --check-failover
+python greencompute-api/infra/local/smoke_test.py --check-failover
 ```
 
 Failover mode marks the primary miner unhealthy through its public agent API, waits for `/platform/v1/debug/reassignments` to record the event, waits for the deployment to become ready again on the failover miner, and then verifies that the next routed inference request returns from the failover hotkey.
@@ -107,19 +107,19 @@ Failover mode marks the primary miner unhealthy through its public agent API, wa
 To validate restart and recovery behavior against the running compose stack:
 
 ```bash
-python greenference-api/infra/local/smoke_test.py --check-recovery
+python greencompute-api/infra/local/smoke_test.py --check-recovery
 ```
 
 By default, recovery mode restarts `control-plane`, `builder`, and `miner-agent`, waits for them to become ready again, then verifies the same deployment is still routable and usage continues to aggregate. You can override the restart set with:
 
 ```bash
-GREENFERENCE_STACK_RESTART_SERVICES=control-plane,validator python greenference-api/infra/local/smoke_test.py --check-recovery
+GREENFERENCE_STACK_RESTART_SERVICES=control-plane,validator python greencompute-api/infra/local/smoke_test.py --check-recovery
 ```
 
 To validate operational surfaces exposed by the stack:
 
 ```bash
-python greenference-api/infra/local/smoke_test.py --check-ops
+python greencompute-api/infra/local/smoke_test.py --check-ops
 ```
 
 Ops mode verifies Prometheus-style `/_metrics` output from the API-side services and checks `/platform/v1/debug/workers` plus `/platform/v1/debug/event-deliveries` on the control plane.
@@ -127,7 +127,7 @@ Ops mode verifies Prometheus-style `/_metrics` output from the API-side services
 To validate miner runtime ownership against the running compose stack:
 
 ```bash
-python greenference-api/infra/local/smoke_test.py --check-miner-runtime
+python greencompute-api/infra/local/smoke_test.py --check-miner-runtime
 ```
 
 Miner-runtime mode verifies:
@@ -143,7 +143,7 @@ Miner-runtime mode verifies:
 To validate failure-mode handling against the running compose stack:
 
 ```bash
-python greenference-api/infra/local/smoke_test.py --check-failures
+python greencompute-api/infra/local/smoke_test.py --check-failures
 ```
 
 Failure mode validation covers:
@@ -157,7 +157,7 @@ Failure mode validation covers:
 To validate operator actions against the running compose stack:
 
 ```bash
-python greenference-api/infra/local/smoke_test.py --check-operator-actions
+python greencompute-api/infra/local/smoke_test.py --check-operator-actions
 ```
 
 Operator-action validation covers:
@@ -204,8 +204,8 @@ The compose stack expects these runtime secrets and defaults:
 - MinIO: `greenference` / `greenference`
 - Registry: local unauthenticated `registry:5000`
 - Miner auth secrets:
-  - `greenference-miner-local-secret`
-  - `greenference-miner-failover-secret`
+  - `greencompute-miner-local-secret`
+  - `greencompute-miner-failover-secret`
 
 ## Recovery Expectations
 

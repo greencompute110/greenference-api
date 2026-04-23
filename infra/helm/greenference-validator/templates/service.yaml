@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: greenference-validator
+  name: greencompute-validator
 spec:
   selector:
-    app: greenference-validator
+    app: greencompute-validator
   ports:
     - port: {{ .Values.service.port }}
       targetPort: 8000

@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: greenference
       POSTGRES_PASSWORD: greenference
     ports:
-      - "${GREENFERENCE_LOCAL_POSTGRES_PORT:-15432}:5432"
+      - "${GREENCOMPUTE_LOCAL_POSTGRES_PORT:-15432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U greenference -d greenference"]
       interval: 5s
@@ -15,13 +15,13 @@ services:
   redis:
     image: redis:7
     ports:
-      - "${GREENFERENCE_LOCAL_REDIS_PORT:-16379}:6379"
+      - "${GREENCOMPUTE_LOCAL_REDIS_PORT:-16379}:6379"
   nats:
     image: nats:2.10
     command: ["-js", "-m", "8222"]
     ports:
-      - "${GREENFERENCE_LOCAL_NATS_PORT:-14222}:4222"
-      - "${GREENFERENCE_LOCAL_NATS_MONITOR_PORT:-18222}:8222"
+      - "${GREENCOMPUTE_LOCAL_NATS_PORT:-14222}:4222"
+      - "${GREENCOMPUTE_LOCAL_NATS_MONITOR_PORT:-18222}:8222"
   minio:
     image: minio/minio:latest
     command: ["server", "/data", "--console-address", ":9001"]
@@ -29,50 +29,50 @@ services:
       MINIO_ROOT_USER: greenference
       MINIO_ROOT_PASSWORD: greenference
     ports:
-      - "${GREENFERENCE_LOCAL_MINIO_PORT:-19000}:9000"
-      - "${GREENFERENCE_LOCAL_MINIO_CONSOLE_PORT:-19001}:9001"
+      - "${GREENCOMPUTE_LOCAL_MINIO_PORT:-19000}:9000"
+      - "${GREENCOMPUTE_LOCAL_MINIO_CONSOLE_PORT:-19001}:9001"
   registry:
     image: registry:2
     ports:
-      - "${GREENFERENCE_LOCAL_REGISTRY_PORT:-15000}:5000"
+      - "${GREENCOMPUTE_LOCAL_REGISTRY_PORT:-15000}:5000"
   migrate:
     image: python:3.12-slim
-    working_dir: /workspace/greenference-api
+    working_dir: /workspace/greencompute-api
     volumes:
       - ../../../:/workspace
     environment:
-      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
-      GREENFERENCE_DB_BOOTSTRAP: "false"
-      GREENFERENCE_REDIS_URL: redis://redis:6379/0
-      GREENFERENCE_NATS_URL: nats://nats:4222
-      GREENFERENCE_OBJECT_STORE_ENDPOINT: http://minio:9000
-      GREENFERENCE_OBJECT_STORE_ACCESS_KEY: greenference
-      GREENFERENCE_OBJECT_STORE_SECRET_KEY: greenference
-      GREENFERENCE_REGISTRY_URL: http://registry:5000
-      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/gateway/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-api/services/validator/src:/workspace/greenference-api/services/builder/src:/workspace/greenference-miner/services/miner-agent/src
+      GREENCOMPUTE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      GREENCOMPUTE_DB_BOOTSTRAP: "false"
+      GREENCOMPUTE_REDIS_URL: redis://redis:6379/0
+      GREENCOMPUTE_NATS_URL: nats://nats:4222
+      GREENCOMPUTE_OBJECT_STORE_ENDPOINT: http://minio:9000
+      GREENCOMPUTE_OBJECT_STORE_ACCESS_KEY: greenference
+      GREENCOMPUTE_OBJECT_STORE_SECRET_KEY: greenference
+      GREENCOMPUTE_REGISTRY_URL: http://registry:5000
+      PYTHONPATH: /workspace/greencompute/protocol/src:/workspace/greencompute-api/packages/persistence/src:/workspace/greencompute-api/services/gateway/src:/workspace/greencompute-api/services/control-plane/src:/workspace/greencompute-api/services/validator/src:/workspace/greencompute-api/services/builder/src:/workspace/greencompute-miner/services/miner-agent/src
     depends_on:
       postgres:
         condition: service_healthy
     command: >
       sh -lc "pip install alembic nats-py psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
-      alembic -c /workspace/greenference-api/alembic.ini upgrade head"
+      alembic -c /workspace/greencompute-api/alembic.ini upgrade head"
   gateway:
     image: python:3.12-slim
-    working_dir: /workspace/greenference-api
+    working_dir: /workspace/greencompute-api
     volumes:
       - ../../../:/workspace
     environment:
-      GREENFERENCE_CORS_ALLOW_ORIGINS: ${GREENFERENCE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
-      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
-      GREENFERENCE_DB_BOOTSTRAP: "false"
-      GREENFERENCE_REDIS_URL: redis://redis:6379/0
-      GREENFERENCE_NATS_URL: nats://nats:4222
-      GREENFERENCE_OBJECT_STORE_ENDPOINT: http://minio:9000
-      GREENFERENCE_OBJECT_STORE_ACCESS_KEY: greenference
-      GREENFERENCE_OBJECT_STORE_SECRET_KEY: greenference
-      GREENFERENCE_REGISTRY_URL: http://registry:5000
-      GREENFERENCE_BUS_TRANSPORT: durable
-      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/gateway/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-api/services/validator/src:/workspace/greenference-api/services/builder/src:/workspace/greenference-miner/services/miner-agent/src
+      GREENCOMPUTE_CORS_ALLOW_ORIGINS: ${GREENCOMPUTE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      GREENCOMPUTE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      GREENCOMPUTE_DB_BOOTSTRAP: "false"
+      GREENCOMPUTE_REDIS_URL: redis://redis:6379/0
+      GREENCOMPUTE_NATS_URL: nats://nats:4222
+      GREENCOMPUTE_OBJECT_STORE_ENDPOINT: http://minio:9000
+      GREENCOMPUTE_OBJECT_STORE_ACCESS_KEY: greenference
+      GREENCOMPUTE_OBJECT_STORE_SECRET_KEY: greenference
+      GREENCOMPUTE_REGISTRY_URL: http://registry:5000
+      GREENCOMPUTE_BUS_TRANSPORT: durable
+      PYTHONPATH: /workspace/greencompute/protocol/src:/workspace/greencompute-api/packages/persistence/src:/workspace/greencompute-api/services/gateway/src:/workspace/greencompute-api/services/control-plane/src:/workspace/greencompute-api/services/validator/src:/workspace/greencompute-api/services/builder/src:/workspace/greencompute-miner/services/miner-agent/src
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -82,9 +82,9 @@ services:
         condition: service_started
     command: >
       sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
-      uvicorn greenference_gateway.main:app --host 0.0.0.0 --port 8000"
+      uvicorn greencompute_gateway.main:app --host 0.0.0.0 --port 8000"
     ports:
-      - "${GREENFERENCE_LOCAL_GATEWAY_PORT:-28000}:8000"
+      - "${GREENCOMPUTE_LOCAL_GATEWAY_PORT:-28000}:8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/readyz')\""]
       interval: 5s
@@ -92,31 +92,31 @@ services:
       retries: 20
   control-plane:
     image: python:3.12-slim
-    working_dir: /workspace/greenference-api
+    working_dir: /workspace/greencompute-api
     volumes:
       - ../../../:/workspace
     environment:
-      GREENFERENCE_CORS_ALLOW_ORIGINS: ${GREENFERENCE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
-      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
-      GREENFERENCE_DB_BOOTSTRAP: "false"
-      GREENFERENCE_REDIS_URL: redis://redis:6379/0
-      GREENFERENCE_NATS_URL: nats://nats:4222
-      GREENFERENCE_OBJECT_STORE_ENDPOINT: http://minio:9000
-      GREENFERENCE_OBJECT_STORE_ACCESS_KEY: greenference
-      GREENFERENCE_OBJECT_STORE_SECRET_KEY: greenference
-      GREENFERENCE_REGISTRY_URL: http://registry:5000
-      GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
-      GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
-      GREENFERENCE_BUS_TRANSPORT: durable
-      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/control-plane/src
+      GREENCOMPUTE_CORS_ALLOW_ORIGINS: ${GREENCOMPUTE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      GREENCOMPUTE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      GREENCOMPUTE_DB_BOOTSTRAP: "false"
+      GREENCOMPUTE_REDIS_URL: redis://redis:6379/0
+      GREENCOMPUTE_NATS_URL: nats://nats:4222
+      GREENCOMPUTE_OBJECT_STORE_ENDPOINT: http://minio:9000
+      GREENCOMPUTE_OBJECT_STORE_ACCESS_KEY: greenference
+      GREENCOMPUTE_OBJECT_STORE_SECRET_KEY: greenference
+      GREENCOMPUTE_REGISTRY_URL: http://registry:5000
+      GREENCOMPUTE_ENABLE_BACKGROUND_WORKERS: "true"
+      GREENCOMPUTE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
+      GREENCOMPUTE_BUS_TRANSPORT: durable
+      PYTHONPATH: /workspace/greencompute/protocol/src:/workspace/greencompute-api/packages/persistence/src:/workspace/greencompute-api/services/control-plane/src
     depends_on:
       migrate:
         condition: service_completed_successfully
     command: >
       sh -lc "pip install nats-py psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
-      uvicorn greenference_control_plane.main:app --host 0.0.0.0 --port 8001"
+      uvicorn greencompute_control_plane.main:app --host 0.0.0.0 --port 8001"
     ports:
-      - "${GREENFERENCE_LOCAL_CONTROL_PLANE_PORT:-28001}:8001"
+      - "${GREENCOMPUTE_LOCAL_CONTROL_PLANE_PORT:-28001}:8001"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8001/readyz')\""]
       interval: 5s
@@ -124,31 +124,31 @@ services:
       retries: 20
   validator:
     image: python:3.12-slim
-    working_dir: /workspace/greenference-api
+    working_dir: /workspace/greencompute-api
     volumes:
       - ../../../:/workspace
     environment:
-      GREENFERENCE_CORS_ALLOW_ORIGINS: ${GREENFERENCE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
-      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
-      GREENFERENCE_DB_BOOTSTRAP: "false"
-      GREENFERENCE_REDIS_URL: redis://redis:6379/0
-      GREENFERENCE_NATS_URL: nats://nats:4222
-      GREENFERENCE_OBJECT_STORE_ENDPOINT: http://minio:9000
-      GREENFERENCE_OBJECT_STORE_ACCESS_KEY: greenference
-      GREENFERENCE_OBJECT_STORE_SECRET_KEY: greenference
-      GREENFERENCE_REGISTRY_URL: http://registry:5000
-      GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
-      GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
-      GREENFERENCE_BUS_TRANSPORT: durable
-      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-api/services/validator/src
+      GREENCOMPUTE_CORS_ALLOW_ORIGINS: ${GREENCOMPUTE_CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      GREENCOMPUTE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      GREENCOMPUTE_DB_BOOTSTRAP: "false"
+      GREENCOMPUTE_REDIS_URL: redis://redis:6379/0
+      GREENCOMPUTE_NATS_URL: nats://nats:4222
+      GREENCOMPUTE_OBJECT_STORE_ENDPOINT: http://minio:9000
+      GREENCOMPUTE_OBJECT_STORE_ACCESS_KEY: greenference
+      GREENCOMPUTE_OBJECT_STORE_SECRET_KEY: greenference
+      GREENCOMPUTE_REGISTRY_URL: http://registry:5000
+      GREENCOMPUTE_ENABLE_BACKGROUND_WORKERS: "true"
+      GREENCOMPUTE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
+      GREENCOMPUTE_BUS_TRANSPORT: durable
+      PYTHONPATH: /workspace/greencompute/protocol/src:/workspace/greencompute-api/packages/persistence/src:/workspace/greencompute-api/services/control-plane/src:/workspace/greencompute-api/services/validator/src
     depends_on:
       migrate:
         condition: service_completed_successfully
     command: >
       sh -lc "pip install nats-py psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
-      uvicorn greenference_validator.main:app --host 0.0.0.0 --port 8002"
+      uvicorn greencompute_validator.main:app --host 0.0.0.0 --port 8002"
     ports:
-      - "${GREENFERENCE_LOCAL_VALIDATOR_PORT:-28002}:8002"
+      - "${GREENCOMPUTE_LOCAL_VALIDATOR_PORT:-28002}:8002"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8002/readyz')\""]
       interval: 5s
@@ -156,33 +156,33 @@ services:
       retries: 20
   builder:
     image: python:3.12-slim
-    working_dir: /workspace/greenference-api
+    working_dir: /workspace/greencompute-api
     volumes:
       - ../../../:/workspace
     environment:
-      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
-      GREENFERENCE_DB_BOOTSTRAP: "false"
-      GREENFERENCE_REDIS_URL: redis://redis:6379/0
-      GREENFERENCE_NATS_URL: nats://nats:4222
-      GREENFERENCE_OBJECT_STORE_ENDPOINT: http://minio:9000
-      GREENFERENCE_OBJECT_STORE_ACCESS_KEY: greenference
-      GREENFERENCE_OBJECT_STORE_SECRET_KEY: greenference
-      GREENFERENCE_OBJECT_STORE_BUCKET: greenference-build-artifacts
-      GREENFERENCE_REGISTRY_URL: http://registry:5000
-      GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
-      GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
-      GREENFERENCE_BUS_TRANSPORT: durable
-      GREENFERENCE_BUILD_EXECUTION_MODE: live
-      GREENFERENCE_BUILD_EXECUTOR_ENDPOINT: ""
-      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/builder/src
+      GREENCOMPUTE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      GREENCOMPUTE_DB_BOOTSTRAP: "false"
+      GREENCOMPUTE_REDIS_URL: redis://redis:6379/0
+      GREENCOMPUTE_NATS_URL: nats://nats:4222
+      GREENCOMPUTE_OBJECT_STORE_ENDPOINT: http://minio:9000
+      GREENCOMPUTE_OBJECT_STORE_ACCESS_KEY: greenference
+      GREENCOMPUTE_OBJECT_STORE_SECRET_KEY: greenference
+      GREENCOMPUTE_OBJECT_STORE_BUCKET: greencompute-build-artifacts
+      GREENCOMPUTE_REGISTRY_URL: http://registry:5000
+      GREENCOMPUTE_ENABLE_BACKGROUND_WORKERS: "true"
+      GREENCOMPUTE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
+      GREENCOMPUTE_BUS_TRANSPORT: durable
+      GREENCOMPUTE_BUILD_EXECUTION_MODE: live
+      GREENCOMPUTE_BUILD_EXECUTOR_ENDPOINT: ""
+      PYTHONPATH: /workspace/greencompute/protocol/src:/workspace/greencompute-api/packages/persistence/src:/workspace/greencompute-api/services/builder/src
     depends_on:
       migrate:
         condition: service_completed_successfully
     command: >
       sh -lc "pip install nats-py psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
-      uvicorn greenference_builder.main:app --host 0.0.0.0 --port 8003"
+      uvicorn greencompute_builder.main:app --host 0.0.0.0 --port 8003"
     ports:
-      - "${GREENFERENCE_LOCAL_BUILDER_PORT:-28003}:8003"
+      - "${GREENCOMPUTE_LOCAL_BUILDER_PORT:-28003}:8003"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8003/readyz')\""]
       interval: 5s
@@ -190,30 +190,30 @@ services:
       retries: 20
   miner-agent:
     image: python:3.12-slim
-    working_dir: /workspace/greenference-miner
+    working_dir: /workspace/greencompute-miner
     volumes:
       - ../../../:/workspace
     environment:
-      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
-      GREENFERENCE_DB_BOOTSTRAP: "false"
-      GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
-      GREENFERENCE_BOOTSTRAP_MINER: "true"
-      GREENFERENCE_ALLOW_RUNTIME_FALLBACK: "true"
-      GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
-      GREENFERENCE_MINER_HOTKEY: miner-local
-      GREENFERENCE_MINER_PAYOUT_ADDRESS: 5FminerLocal
-      GREENFERENCE_MINER_AUTH_SECRET: greenference-miner-local-secret
-      GREENFERENCE_MINER_API_BASE_URL: http://miner-agent:8004
-      GREENFERENCE_MINER_VALIDATOR_URL: http://validator:8002
-      GREENFERENCE_MINER_NODE_ID: node-local
-      GREENFERENCE_MINER_GPU_MODEL: a100
-      GREENFERENCE_MINER_GPU_COUNT: "1"
-      GREENFERENCE_MINER_AVAILABLE_GPUS: "1"
-      GREENFERENCE_MINER_VRAM_GB_PER_GPU: "80"
-      GREENFERENCE_MINER_CPU_CORES: "32"
-      GREENFERENCE_MINER_MEMORY_GB: "128"
-      GREENFERENCE_MINER_PERFORMANCE_SCORE: "1.25"
-      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-api/services/builder/src:/workspace/greenference-miner/services/miner-agent/src
+      GREENCOMPUTE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      GREENCOMPUTE_DB_BOOTSTRAP: "false"
+      GREENCOMPUTE_ENABLE_BACKGROUND_WORKERS: "true"
+      GREENCOMPUTE_BOOTSTRAP_MINER: "true"
+      GREENCOMPUTE_ALLOW_RUNTIME_FALLBACK: "true"
+      GREENCOMPUTE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
+      GREENCOMPUTE_MINER_HOTKEY: miner-local
+      GREENCOMPUTE_MINER_PAYOUT_ADDRESS: 5FminerLocal
+      GREENCOMPUTE_MINER_AUTH_SECRET: greencompute-miner-local-secret
+      GREENCOMPUTE_MINER_API_BASE_URL: http://miner-agent:8004
+      GREENCOMPUTE_MINER_VALIDATOR_URL: http://validator:8002
+      GREENCOMPUTE_MINER_NODE_ID: node-local
+      GREENCOMPUTE_MINER_GPU_MODEL: a100
+      GREENCOMPUTE_MINER_GPU_COUNT: "1"
+      GREENCOMPUTE_MINER_AVAILABLE_GPUS: "1"
+      GREENCOMPUTE_MINER_VRAM_GB_PER_GPU: "80"
+      GREENCOMPUTE_MINER_CPU_CORES: "32"
+      GREENCOMPUTE_MINER_MEMORY_GB: "128"
+      GREENCOMPUTE_MINER_PERFORMANCE_SCORE: "1.25"
+      PYTHONPATH: /workspace/greencompute/protocol/src:/workspace/greencompute-api/packages/persistence/src:/workspace/greencompute-api/services/control-plane/src:/workspace/greencompute-api/services/builder/src:/workspace/greencompute-miner/services/miner-agent/src
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -221,9 +221,9 @@ services:
         condition: service_healthy
     command: >
       sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
-      uvicorn greenference_miner_agent.main:app --host 0.0.0.0 --port 8004"
+      uvicorn greencompute_miner_agent.main:app --host 0.0.0.0 --port 8004"
     ports:
-      - "${GREENFERENCE_LOCAL_MINER_PORT:-28004}:8004"
+      - "${GREENCOMPUTE_LOCAL_MINER_PORT:-28004}:8004"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8004/readyz')\""]
       interval: 5s
@@ -231,36 +231,36 @@ services:
       retries: 20
   compute-agent:
     image: python:3.12-slim
-    working_dir: /workspace/greenference-compute
+    working_dir: /workspace/greencompute-compute
     volumes:
       - ../../../:/workspace
     environment:
-      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
-      GREENFERENCE_DB_BOOTSTRAP: "false"
-      GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
-      GREENFERENCE_BOOTSTRAP_MINER: "true"
-      GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
-      GREENFERENCE_MINER_HOTKEY: compute-local
-      GREENFERENCE_MINER_PAYOUT_ADDRESS: 5FcomputeLocal
-      GREENFERENCE_MINER_AUTH_SECRET: greenference-compute-local-secret
-      GREENFERENCE_MINER_API_BASE_URL: http://compute-agent:8006
-      GREENFERENCE_MINER_VALIDATOR_URL: http://validator:8002
-      GREENFERENCE_MINER_NODE_ID: compute-node-local
-      GREENFERENCE_GPU_MODEL: a100
-      GREENFERENCE_GPU_COUNT: "1"
-      GREENFERENCE_VRAM_GB_PER_GPU: "80"
-      GREENFERENCE_CPU_CORES: "32"
-      GREENFERENCE_MEMORY_GB: "128"
-      GREENFERENCE_PERFORMANCE_SCORE: "1.0"
-      GREENFERENCE_GPU_SPLIT_UNITS: "100"
-      GREENFERENCE_POD_BACKEND: stub
-      GREENFERENCE_VM_BACKEND: stub
-      GREENFERENCE_SSH_HOST: "0.0.0.0"
-      GREENFERENCE_SSH_PORT_RANGE_START: "31000"
-      GREENFERENCE_SSH_PORT_RANGE_END: "32000"
-      GREENFERENCE_VOLUME_BASE_DIR: /tmp/greenference-volumes
-      GREENFERENCE_SUPPORTED_WORKLOAD_KINDS: pod,vm
-      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-api/services/builder/src:/workspace/greenference-compute/services/compute-agent/src
+      GREENCOMPUTE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      GREENCOMPUTE_DB_BOOTSTRAP: "false"
+      GREENCOMPUTE_ENABLE_BACKGROUND_WORKERS: "true"
+      GREENCOMPUTE_BOOTSTRAP_MINER: "true"
+      GREENCOMPUTE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
+      GREENCOMPUTE_MINER_HOTKEY: compute-local
+      GREENCOMPUTE_MINER_PAYOUT_ADDRESS: 5FcomputeLocal
+      GREENCOMPUTE_MINER_AUTH_SECRET: greencompute-compute-local-secret
+      GREENCOMPUTE_MINER_API_BASE_URL: http://compute-agent:8006
+      GREENCOMPUTE_MINER_VALIDATOR_URL: http://validator:8002
+      GREENCOMPUTE_MINER_NODE_ID: compute-node-local
+      GREENCOMPUTE_GPU_MODEL: a100
+      GREENCOMPUTE_GPU_COUNT: "1"
+      GREENCOMPUTE_VRAM_GB_PER_GPU: "80"
+      GREENCOMPUTE_CPU_CORES: "32"
+      GREENCOMPUTE_MEMORY_GB: "128"
+      GREENCOMPUTE_PERFORMANCE_SCORE: "1.0"
+      GREENCOMPUTE_GPU_SPLIT_UNITS: "100"
+      GREENCOMPUTE_POD_BACKEND: stub
+      GREENCOMPUTE_VM_BACKEND: stub
+      GREENCOMPUTE_SSH_HOST: "0.0.0.0"
+      GREENCOMPUTE_SSH_PORT_RANGE_START: "31000"
+      GREENCOMPUTE_SSH_PORT_RANGE_END: "32000"
+      GREENCOMPUTE_VOLUME_BASE_DIR: /tmp/greencompute-volumes
+      GREENCOMPUTE_SUPPORTED_WORKLOAD_KINDS: pod,vm
+      PYTHONPATH: /workspace/greencompute/protocol/src:/workspace/greencompute-api/packages/persistence/src:/workspace/greencompute-api/services/control-plane/src:/workspace/greencompute-api/services/builder/src:/workspace/greencompute-compute/services/compute-agent/src
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -268,9 +268,9 @@ services:
         condition: service_healthy
     command: >
       sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
-      uvicorn greenference_compute_agent.main:app --host 0.0.0.0 --port 8006"
+      uvicorn greencompute_compute_agent.main:app --host 0.0.0.0 --port 8006"
     ports:
-      - "${GREENFERENCE_LOCAL_COMPUTE_PORT:-28006}:8006"
+      - "${GREENCOMPUTE_LOCAL_COMPUTE_PORT:-28006}:8006"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8006/readyz')\""]
       interval: 5s
@@ -278,33 +278,33 @@ services:
       retries: 20
   node-agent:
     image: python:3.12-slim
-    working_dir: /workspace/greenference-node
+    working_dir: /workspace/greencompute-node
     volumes:
       - ../../../:/workspace
     environment:
-      GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
-      GREENFERENCE_BOOTSTRAP_MINER: "true"
-      GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
-      GREENFERENCE_CONTROL_PLANE_URL: http://control-plane:8001
-      GREENFERENCE_MINER_HOTKEY: node-unified
-      GREENFERENCE_MINER_PAYOUT_ADDRESS: 5FnodeUnified
-      GREENFERENCE_MINER_AUTH_SECRET: greenference-node-local-secret
-      GREENFERENCE_MINER_API_BASE_URL: http://node-agent:8007
-      GREENFERENCE_MINER_VALIDATOR_URL: http://validator:8002
-      GREENFERENCE_MINER_NODE_ID: node-unified
-      GREENFERENCE_GPU_MODEL: a100
-      GREENFERENCE_GPU_COUNT: "2"
-      GREENFERENCE_VRAM_GB_PER_GPU: "80"
-      GREENFERENCE_CPU_CORES: "32"
-      GREENFERENCE_MEMORY_GB: "128"
-      GREENFERENCE_PERFORMANCE_SCORE: "1.5"
-      GREENFERENCE_GPU_SPLIT_UNITS: "100"
-      GREENFERENCE_SUPPORTED_WORKLOAD_KINDS: inference,pod,vm
-      GREENFERENCE_POD_BACKEND: stub
-      GREENFERENCE_VM_BACKEND: stub
-      GREENFERENCE_INFERENCE_BACKEND: process
-      GREENFERENCE_SSH_HOST: "0.0.0.0"
-      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-node/services/node-agent/src
+      GREENCOMPUTE_ENABLE_BACKGROUND_WORKERS: "true"
+      GREENCOMPUTE_BOOTSTRAP_MINER: "true"
+      GREENCOMPUTE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
+      GREENCOMPUTE_CONTROL_PLANE_URL: http://control-plane:8001
+      GREENCOMPUTE_MINER_HOTKEY: node-unified
+      GREENCOMPUTE_MINER_PAYOUT_ADDRESS: 5FnodeUnified
+      GREENCOMPUTE_MINER_AUTH_SECRET: greencompute-node-local-secret
+      GREENCOMPUTE_MINER_API_BASE_URL: http://node-agent:8007
+      GREENCOMPUTE_MINER_VALIDATOR_URL: http://validator:8002
+      GREENCOMPUTE_MINER_NODE_ID: node-unified
+      GREENCOMPUTE_GPU_MODEL: a100
+      GREENCOMPUTE_GPU_COUNT: "2"
+      GREENCOMPUTE_VRAM_GB_PER_GPU: "80"
+      GREENCOMPUTE_CPU_CORES: "32"
+      GREENCOMPUTE_MEMORY_GB: "128"
+      GREENCOMPUTE_PERFORMANCE_SCORE: "1.5"
+      GREENCOMPUTE_GPU_SPLIT_UNITS: "100"
+      GREENCOMPUTE_SUPPORTED_WORKLOAD_KINDS: inference,pod,vm
+      GREENCOMPUTE_POD_BACKEND: stub
+      GREENCOMPUTE_VM_BACKEND: stub
+      GREENCOMPUTE_INFERENCE_BACKEND: process
+      GREENCOMPUTE_SSH_HOST: "0.0.0.0"
+      PYTHONPATH: /workspace/greencompute/protocol/src:/workspace/greencompute-node/services/node-agent/src
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -312,9 +312,9 @@ services:
         condition: service_healthy
     command: >
       sh -lc "pip install httpx fastapi uvicorn pydantic &&
-      uvicorn greenference_node_agent.main:app --host 0.0.0.0 --port 8007"
+      uvicorn greencompute_node_agent.main:app --host 0.0.0.0 --port 8007"
     ports:
-      - "${GREENFERENCE_LOCAL_NODE_AGENT_PORT:-28007}:8007"
+      - "${GREENCOMPUTE_LOCAL_NODE_AGENT_PORT:-28007}:8007"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8007/readyz')\""]
       interval: 5s
@@ -322,30 +322,30 @@ services:
       retries: 20
   miner-agent-b:
     image: python:3.12-slim
-    working_dir: /workspace/greenference-miner
+    working_dir: /workspace/greencompute-miner
     volumes:
       - ../../../:/workspace
     environment:
-      GREENFERENCE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
-      GREENFERENCE_DB_BOOTSTRAP: "false"
-      GREENFERENCE_ENABLE_BACKGROUND_WORKERS: "true"
-      GREENFERENCE_BOOTSTRAP_MINER: "true"
-      GREENFERENCE_ALLOW_RUNTIME_FALLBACK: "true"
-      GREENFERENCE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
-      GREENFERENCE_MINER_HOTKEY: miner-failover
-      GREENFERENCE_MINER_PAYOUT_ADDRESS: 5FminerFailover
-      GREENFERENCE_MINER_AUTH_SECRET: greenference-miner-failover-secret
-      GREENFERENCE_MINER_API_BASE_URL: http://miner-agent-b:8005
-      GREENFERENCE_MINER_VALIDATOR_URL: http://validator:8002
-      GREENFERENCE_MINER_NODE_ID: node-failover
-      GREENFERENCE_MINER_GPU_MODEL: a100
-      GREENFERENCE_MINER_GPU_COUNT: "1"
-      GREENFERENCE_MINER_AVAILABLE_GPUS: "1"
-      GREENFERENCE_MINER_VRAM_GB_PER_GPU: "80"
-      GREENFERENCE_MINER_CPU_CORES: "32"
-      GREENFERENCE_MINER_MEMORY_GB: "128"
-      GREENFERENCE_MINER_PERFORMANCE_SCORE: "1.1"
-      PYTHONPATH: /workspace/greenference/protocol/src:/workspace/greenference-api/packages/persistence/src:/workspace/greenference-api/services/control-plane/src:/workspace/greenference-api/services/builder/src:/workspace/greenference-miner/services/miner-agent/src
+      GREENCOMPUTE_DATABASE_URL: postgresql+psycopg://greenference:greenference@postgres:5432/greenference
+      GREENCOMPUTE_DB_BOOTSTRAP: "false"
+      GREENCOMPUTE_ENABLE_BACKGROUND_WORKERS: "true"
+      GREENCOMPUTE_BOOTSTRAP_MINER: "true"
+      GREENCOMPUTE_ALLOW_RUNTIME_FALLBACK: "true"
+      GREENCOMPUTE_WORKER_POLL_INTERVAL_SECONDS: "0.5"
+      GREENCOMPUTE_MINER_HOTKEY: miner-failover
+      GREENCOMPUTE_MINER_PAYOUT_ADDRESS: 5FminerFailover
+      GREENCOMPUTE_MINER_AUTH_SECRET: greencompute-miner-failover-secret
+      GREENCOMPUTE_MINER_API_BASE_URL: http://miner-agent-b:8005
+      GREENCOMPUTE_MINER_VALIDATOR_URL: http://validator:8002
+      GREENCOMPUTE_MINER_NODE_ID: node-failover
+      GREENCOMPUTE_MINER_GPU_MODEL: a100
+      GREENCOMPUTE_MINER_GPU_COUNT: "1"
+      GREENCOMPUTE_MINER_AVAILABLE_GPUS: "1"
+      GREENCOMPUTE_MINER_VRAM_GB_PER_GPU: "80"
+      GREENCOMPUTE_MINER_CPU_CORES: "32"
+      GREENCOMPUTE_MINER_MEMORY_GB: "128"
+      GREENCOMPUTE_MINER_PERFORMANCE_SCORE: "1.1"
+      PYTHONPATH: /workspace/greencompute/protocol/src:/workspace/greencompute-api/packages/persistence/src:/workspace/greencompute-api/services/control-plane/src:/workspace/greencompute-api/services/builder/src:/workspace/greencompute-miner/services/miner-agent/src
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -353,9 +353,9 @@ services:
         condition: service_healthy
     command: >
       sh -lc "pip install psycopg[binary] sqlalchemy fastapi uvicorn pydantic &&
-      uvicorn greenference_miner_agent.main:app --host 0.0.0.0 --port 8005"
+      uvicorn greencompute_miner_agent.main:app --host 0.0.0.0 --port 8005"
     ports:
-      - "${GREENFERENCE_LOCAL_FAILOVER_MINER_PORT:-28005}:8005"
+      - "${GREENCOMPUTE_LOCAL_FAILOVER_MINER_PORT:-28005}:8005"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8005/readyz')\""]
       interval: 5s

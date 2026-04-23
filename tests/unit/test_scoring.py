@@ -1,5 +1,5 @@
-from greenference_protocol import NodeCapability, ProbeResult
-from greenference_validator.domain.scoring import ScoreEngine
+from greencompute_protocol import NodeCapability, ProbeResult
+from greencompute_validator.domain.scoring import ScoreEngine
 
 
 def test_scoring_penalizes_proxy_suspicion_and_signature_drift():

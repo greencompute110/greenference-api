@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from greenference_persistence import NatsJetStreamBus, SubjectBus, WorkflowEventRepository, create_subject_bus
-from greenference_persistence.bus import BusMessage
+from greencompute_persistence import NatsJetStreamBus, SubjectBus, WorkflowEventRepository, create_subject_bus
+from greencompute_persistence.bus import BusMessage
 
 
 def test_create_subject_bus_uses_durable_for_auto_without_nats() -> None:

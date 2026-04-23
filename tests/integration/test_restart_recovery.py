@@ -5,16 +5,16 @@ from urllib.parse import urlparse
 
 import pytest
 
-from greenference_builder.application.services import BuilderService
-from greenference_builder.infrastructure.repository import BuilderRepository
-from greenference_control_plane.application.services import ControlPlaneService
-from greenference_control_plane.infrastructure.repository import ControlPlaneRepository
-from greenference_gateway.application.services import GatewayService
-from greenference_gateway.infrastructure import inference_client as inference_client_module
-from greenference_gateway.infrastructure.repository import GatewayRepository
-from greenference_miner_agent.application.services import MinerAgentService
-from greenference_miner_agent.infrastructure.repository import MinerAgentRepository
-from greenference_protocol import (
+from greencompute_builder.application.services import BuilderService
+from greencompute_builder.infrastructure.repository import BuilderRepository
+from greencompute_control_plane.application.services import ControlPlaneService
+from greencompute_control_plane.infrastructure.repository import ControlPlaneRepository
+from greencompute_gateway.application.services import GatewayService
+from greencompute_gateway.infrastructure import inference_client as inference_client_module
+from greencompute_gateway.infrastructure.repository import GatewayRepository
+from greencompute_miner_agent.application.services import MinerAgentService
+from greencompute_miner_agent.infrastructure.repository import MinerAgentRepository
+from greencompute_protocol import (
     BuildRequest,
     CapacityUpdate,
     ChatCompletionRequest,
@@ -62,7 +62,7 @@ def _patch_upstream(monkeypatch: pytest.MonkeyPatch, miner: MinerAgentService) -
 
 
 def _db_url(tmp_path: Path) -> str:
-    return f"sqlite+pysqlite:///{tmp_path / 'greenference-recovery.db'}"
+    return f"sqlite+pysqlite:///{tmp_path / 'greencompute-recovery.db'}"
 
 
 def test_restart_recovery_preserves_workflows_and_routing(

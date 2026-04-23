@@ -1,5 +1,5 @@
-from greenference_control_plane.infrastructure.repository import ControlPlaneRepository
-from greenference_protocol import Heartbeat, MinerRegistration, WorkloadCreateRequest, WorkloadSpec
+from greencompute_control_plane.infrastructure.repository import ControlPlaneRepository
+from greencompute_protocol import Heartbeat, MinerRegistration, WorkloadCreateRequest, WorkloadSpec
 
 
 def test_control_plane_repository_round_trips_core_records():

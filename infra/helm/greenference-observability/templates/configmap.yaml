@@ -1,11 +1,11 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: greenference-observability
+  name: greencompute-observability
 data:
   dashboards.yaml: |
     dashboards:
-      - greenference-control-plane
-      - greenference-validator
-      - greenference-miner
+      - greencompute-control-plane
+      - greencompute-validator
+      - greencompute-miner
 

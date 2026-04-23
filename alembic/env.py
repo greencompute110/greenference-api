@@ -14,15 +14,15 @@ sys.path.insert(0, str(ROOT / "packages/persistence/src"))
 
 # Protocol: try local dev layout then container layout
 for _candidate in [
-    ROOT.parent / "greenference" / "protocol" / "src",  # local dev
+    ROOT.parent / "greencompute" / "protocol" / "src",  # local dev
     ROOT.parent / "protocol" / "src",                     # docker container
 ]:
     if _candidate.is_dir():
         sys.path.insert(0, str(_candidate))
         break
 
-from greenference_persistence.config import get_database_url  # noqa: E402
-from greenference_persistence.orm import Base  # noqa: E402
+from greencompute_persistence.config import get_database_url  # noqa: E402
+from greencompute_persistence.orm import Base  # noqa: E402
 
 config = context.config
 if config.config_file_name is not None:

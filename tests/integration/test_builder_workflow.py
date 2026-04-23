@@ -3,8 +3,8 @@ import base64
 
 from sqlalchemy import select
 
-from greenference_builder.application.services import BuilderService
-from greenference_builder.infrastructure.execution import (
+from greencompute_builder.application.services import BuilderService
+from greencompute_builder.infrastructure.execution import (
     AdapterBackedBuildRunner,
     BuildExecutorAdapter,
     BuilderExecutionError,
@@ -13,13 +13,13 @@ from greenference_builder.infrastructure.execution import (
     SimulatedObjectStoreAdapter,
     SimulatedRegistryAdapter,
 )
-from greenference_builder.infrastructure.repository import BuilderRepository
-from greenference_control_plane.application.services import ControlPlaneService
-from greenference_control_plane.config import settings
-from greenference_control_plane.infrastructure.repository import ControlPlaneRepository
-from greenference_persistence import RuntimeSettings, SubjectBus, WorkflowEventRepository, session_scope
-from greenference_persistence.orm import BusDeliveryORM, WorkflowEventORM
-from greenference_protocol import (
+from greencompute_builder.infrastructure.repository import BuilderRepository
+from greencompute_control_plane.application.services import ControlPlaneService
+from greencompute_control_plane.config import settings
+from greencompute_control_plane.infrastructure.repository import ControlPlaneRepository
+from greencompute_persistence import RuntimeSettings, SubjectBus, WorkflowEventRepository, session_scope
+from greencompute_persistence.orm import BusDeliveryORM, WorkflowEventORM
+from greencompute_protocol import (
     BuildContextRecord,
     BuildContextUploadRequest,
     BuildRequest,
@@ -125,10 +125,10 @@ def test_builder_persists_context_and_build_events(monkeypatch) -> None:
     assert context.source_uri == "s3://greenference/builds/echo.zip"
     assert context.dockerfile_object_uri == "s3://greenference/builds/echo.zip.docker_Inference.Dockerfile"
     assert context.context_digest is not None
-    assert context.staged_context_uri == f"s3://greenference-build-artifacts/contexts/{build.build_id}/context.tar.gz"
-    assert context.context_manifest_uri == f"s3://greenference-build-artifacts/manifests/{build.build_id}.json"
+    assert context.staged_context_uri == f"s3://greencompute-build-artifacts/contexts/{build.build_id}/context.tar.gz"
+    assert context.context_manifest_uri == f"s3://greencompute-build-artifacts/manifests/{build.build_id}.json"
     assert saved is not None
-    assert saved.build_log_uri == f"s3://greenference-build-artifacts/build-logs/{build.build_id}.log"
+    assert saved.build_log_uri == f"s3://greencompute-build-artifacts/build-logs/{build.build_id}.log"
     assert saved.registry_manifest_uri == f"{saved.artifact_uri}@{saved.artifact_digest}"
     assert saved.executor_name == "simulated-buildkit"
     assert saved.build_duration_seconds is not None
@@ -207,7 +207,7 @@ def test_builder_live_mode_uses_remote_executor_before_publish(monkeypatch) -> N
     repository = BuilderRepository(database_url=shared_db, bootstrap=True)
     workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
     settings = RuntimeSettings(
-        service_name="greenference-builder",
+        service_name="greencompute-builder",
         database_url=shared_db,
         build_execution_mode="simulated",
     )
@@ -334,7 +334,7 @@ def test_builder_recovery_requeues_inflight_live_job_without_duplicate_delivery(
     repository = BuilderRepository(database_url=shared_db, bootstrap=True)
     workflow_repository = WorkflowEventRepository(database_url=shared_db, bootstrap=True)
     settings = RuntimeSettings(
-        service_name="greenference-builder",
+        service_name="greencompute-builder",
         database_url=shared_db,
         build_execution_mode="simulated",
     )
@@ -445,11 +445,11 @@ def test_builder_persists_attempts_logs_and_cancellation(monkeypatch) -> None:
 
 def test_live_object_store_creates_bucket_on_missing_head() -> None:
     settings = RuntimeSettings(
-        service_name="greenference-builder",
+        service_name="greencompute-builder",
         database_url="sqlite+pysqlite:///:memory:",
         build_execution_mode="live",
         object_store_endpoint="http://minio:9000",
-        object_store_bucket="greenference-build-artifacts",
+        object_store_bucket="greencompute-build-artifacts",
     )
     adapter = S3CompatibleObjectStoreAdapter(settings)
     calls: list[tuple[str, str]] = []
@@ -458,7 +458,7 @@ def test_live_object_store_creates_bucket_on_missing_head() -> None:
         calls.append((method, key))
         if method == "HEAD":
             raise BuilderExecutionError(
-                "object store request failed status=404 target=http://minio:9000/greenference-build-artifacts",
+                "object store request failed status=404 target=http://minio:9000/greencompute-build-artifacts",
                 operation="object_store:head",
                 failure_class="object_store_failure",
                 retryable=False,

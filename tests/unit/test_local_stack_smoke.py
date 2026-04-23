@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).resolve().parents[2] / "infra" / "local" / "smoke_test.py"
-SPEC = importlib.util.spec_from_file_location("greenference_local_smoke_test", MODULE_PATH)
+SPEC = importlib.util.spec_from_file_location("greencompute_local_smoke_test", MODULE_PATH)
 assert SPEC is not None
 assert SPEC.loader is not None
 SMOKE_TEST = importlib.util.module_from_spec(SPEC)

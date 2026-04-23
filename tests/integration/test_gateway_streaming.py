@@ -10,18 +10,18 @@ import pytest
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
-from greenference_builder.application.services import BuilderService
-from greenference_builder.infrastructure.repository import BuilderRepository
-from greenference_control_plane.application.services import ControlPlaneService
-from greenference_control_plane.infrastructure.repository import ControlPlaneRepository
-from greenference_gateway.domain.routing import NoReadyDeploymentError
-from greenference_gateway.application.services import GatewayService
-from greenference_gateway.infrastructure import inference_client as inference_client_module
-from greenference_gateway.infrastructure.repository import GatewayRepository
-from greenference_gateway.transport import routes as routes_module
-from greenference_miner_agent.application.services import MinerAgentService
-from greenference_miner_agent.infrastructure.repository import MinerAgentRepository
-from greenference_protocol import (
+from greencompute_builder.application.services import BuilderService
+from greencompute_builder.infrastructure.repository import BuilderRepository
+from greencompute_control_plane.application.services import ControlPlaneService
+from greencompute_control_plane.infrastructure.repository import ControlPlaneRepository
+from greencompute_gateway.domain.routing import NoReadyDeploymentError
+from greencompute_gateway.application.services import GatewayService
+from greencompute_gateway.infrastructure import inference_client as inference_client_module
+from greencompute_gateway.infrastructure.repository import GatewayRepository
+from greencompute_gateway.transport import routes as routes_module
+from greencompute_miner_agent.application.services import MinerAgentService
+from greencompute_miner_agent.infrastructure.repository import MinerAgentRepository
+from greencompute_protocol import (
     BuildRequest,
     CapacityUpdate,
     ChatCompletionRequest,
@@ -247,7 +247,7 @@ def test_gateway_routes_by_ingress_host(monkeypatch: pytest.MonkeyPatch) -> None
         builder=builder,
     )
     miner = MinerAgentService(
-        MinerAgentRepository(state_path="/tmp/greenference-api-routing-host.miner-state.json"),
+        MinerAgentRepository(state_path="/tmp/greencompute-api-routing-host.miner-state.json"),
         control_plane=control_plane,
         builder=builder,
     )

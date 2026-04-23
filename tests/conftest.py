@@ -9,13 +9,13 @@ os.environ.setdefault("GREENFERENCE_BUILD_EXECUTION_MODE", "simulated")
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = ROOT.parent
 SRC_PATHS = [
-    WORKSPACE_ROOT / "greenference/protocol/src",
+    WORKSPACE_ROOT / "greencompute/protocol/src",
     ROOT / "packages/persistence/src",
     ROOT / "services/gateway/src",
     ROOT / "services/control-plane/src",
     ROOT / "services/validator/src",
     ROOT / "services/builder/src",
-    WORKSPACE_ROOT / "greenference-miner/services/miner-agent/src",
+    WORKSPACE_ROOT / "greencompute-miner/services/miner-agent/src",
 ]
 
 for path in SRC_PATHS:

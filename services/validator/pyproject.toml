@@ -1,5 +1,5 @@
 [project]
-name = "greenference-validator"
+name = "greencompute-validator"
 version = "0.1.0"
 description = "Greenference validator service"
 requires-python = ">=3.12"
@@ -8,17 +8,17 @@ dependencies = [
   "uvicorn>=0.32,<1.0",
   "pydantic>=2.9,<3.0",
   "python-multipart>=0.0.9",
-  "greenference-protocol",
-  "greenference-persistence",
+  "greencompute-protocol",
+  "greencompute-persistence",
 ]
 
 [tool.uv.sources]
-greenference-persistence = { workspace = true }
-greenference-protocol = { path = "../../../greenference/protocol" }
+greencompute-persistence = { workspace = true }
+greencompute-protocol = { path = "../../../greencompute/protocol" }
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/greenference_validator"]
+packages = ["src/greencompute_validator"]
