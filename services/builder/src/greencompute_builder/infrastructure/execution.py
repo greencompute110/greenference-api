@@ -493,7 +493,7 @@ class OCIRegistryAdapter(RegistryAdapter):
                 "created": _utcnow_isoformat(),
                 "architecture": "amd64",
                 "os": "linux",
-                "config": {"Labels": {"greenference.build_id": build.build_id}},
+                "config": {"Labels": {"greencompute.build_id": build.build_id}},
                 "rootfs": {"type": "layers", "diff_ids": []},
                 "history": [{"created": _utcnow_isoformat(), "created_by": "greencompute-builder"}],
             },
@@ -529,7 +529,7 @@ class OCIRegistryAdapter(RegistryAdapter):
                 ],
                 "annotations": {
                     "org.opencontainers.image.ref.name": image_tag,
-                    "greenference.build_id": build.build_id,
+                    "greencompute.build_id": build.build_id,
                 },
             },
             sort_keys=True,
