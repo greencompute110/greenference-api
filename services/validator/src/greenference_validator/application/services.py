@@ -77,6 +77,11 @@ class ValidatorService:
         # Cache of the latest computed replica targets so per-miner rebalance
         # can pass them to the orchestrator without recomputing.
         self._replica_targets: dict[str, int] = {}
+        # Failure cooldown: (hotkey, model_id) → datetime when deployment
+        # last failed. Blocks respawning on the same miner for N minutes so
+        # a broken miner (bad driver, OOM, missing weights, etc) doesn't burn
+        # an infinite respawn loop.
+        self._replica_cooldown_until: dict[tuple[str, str], "datetime"] = {}
 
         # Bittensor chain (lazy — only connects when enabled)
         self.metagraph = MetagraphCache()
@@ -300,6 +305,22 @@ class ValidatorService:
         cap = self.repository.get_capability(hotkey)
         if cap is None:
             return
+
+        # Detect deployments that failed/terminated since last reconcile and
+        # add a cooldown so we don't instantly respawn on the same (miner,
+        # model) pair. Without this, a miner that can't run a given model
+        # (bad driver, CUDA version, OOM) burns an infinite respawn loop.
+        now_ts = datetime.now(UTC)
+        all_deps = self.repository.list_flux_deployments_incl_terminated(hotkey)
+        for d in all_deps:
+            if d["model_id"] and d["state"] in ("failed", "terminated"):
+                key = (hotkey, d["model_id"])
+                # 15-min cooldown. Admin can manually retry sooner by
+                # clearing service._replica_cooldown_until.
+                self._replica_cooldown_until.setdefault(
+                    key, now_ts + timedelta(minutes=15),
+                )
+
         target_models = set(new_state.inference_assignments.keys())
         existing = self.repository.list_flux_deployments(hotkey)
         existing_models = {d["model_id"] for d in existing if d["model_id"]}
@@ -317,6 +338,15 @@ class ValidatorService:
 
         # Provision replicas for newly-assigned catalog models
         for model_id in target_models - existing_models:
+            # Cooldown gate — skip if this (miner, model) pair has been in
+            # a failed/terminated state within the cooldown window.
+            cd = self._replica_cooldown_until.get((hotkey, model_id))
+            if cd is not None and cd > now_ts:
+                logger.info(
+                    "flux reconcile: skipping %s on %s (cooldown until %s)",
+                    model_id, hotkey, cd.isoformat(),
+                )
+                continue
             workload_id = self.repository.get_catalog_workload_id(model_id)
             if workload_id is None:
                 logger.warning(

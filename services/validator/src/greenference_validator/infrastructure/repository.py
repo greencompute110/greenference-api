@@ -544,22 +544,34 @@ class ValidatorRepository:
 
     def list_flux_deployments(self, hotkey: str) -> list[dict]:
         """Return [(deployment_id, workload_id, model_id, state)] for live
-        Flux-managed deployments on this miner. State filter excludes TERMINATED
-        + FAILED so the reconciler doesn't treat tombstones as current."""
+        Flux-managed deployments on this miner. Excludes terminated (the
+        reconciler treats terminated as 'no current replica')."""
+        return self._list_flux_deployments(hotkey, include_terminated=False)
+
+    def list_flux_deployments_incl_terminated(self, hotkey: str) -> list[dict]:
+        """Same as list_flux_deployments but includes recently terminated
+        rows. Used to populate failure cooldown — a recently-terminated
+        (miner, model) pair blocks re-scheduling for a cooldown window."""
+        return self._list_flux_deployments(hotkey, include_terminated=True)
+
+    def _list_flux_deployments(self, hotkey: str, *, include_terminated: bool) -> list[dict]:
         with session_scope(self.session_factory) as session:
-            rows = session.execute(
+            stmt = (
                 select(
                     DeploymentORM.deployment_id,
                     DeploymentORM.workload_id,
                     DeploymentORM.state,
+                    DeploymentORM.updated_at,
                     WorkloadORM.metadata_json,
                 )
                 .join(WorkloadORM, WorkloadORM.workload_id == DeploymentORM.workload_id)
                 .where(DeploymentORM.hotkey == hotkey)
-                .where(DeploymentORM.state != "terminated")
-            ).all()
+            )
+            if not include_terminated:
+                stmt = stmt.where(DeploymentORM.state != "terminated")
+            rows = session.execute(stmt).all()
             out: list[dict] = []
-            for dep_id, wl_id, state, meta in rows:
+            for dep_id, wl_id, state, updated_at, meta in rows:
                 meta = meta or {}
                 if meta.get("managed_by") != "flux":
                     continue
@@ -568,6 +580,7 @@ class ValidatorRepository:
                     "workload_id": wl_id,
                     "model_id": meta.get("catalog_model_id"),
                     "state": state,
+                    "updated_at": updated_at,
                 })
             return out
 
