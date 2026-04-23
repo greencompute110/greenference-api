@@ -118,9 +118,20 @@ class HttpInferenceClient:
         if not deployment.endpoint:
             raise InferenceUpstreamError(f"deployment endpoint missing: {deployment.deployment_id}")
 
+        # Force stream_options.include_usage=true so vLLM emits a final
+        # chunk with {usage: {...}} — the gateway uses it to debit the user
+        # after the stream ends. Without this, streaming calls are free.
+        existing_opts = getattr(payload, "stream_options", None) or {}
+        if not isinstance(existing_opts, dict):
+            existing_opts = {}
+        existing_opts.setdefault("include_usage", True)
+        streamed = payload.model_copy(update={
+            "stream": True,
+            "stream_options": existing_opts,
+        })
         upstream = request.Request(
             url=f"{deployment.endpoint.rstrip('/')}/v1/chat/completions",
-            data=payload.model_copy(update={"stream": True}).model_dump_json().encode(),
+            data=streamed.model_dump_json().encode(),
             headers=self._base_headers(request_id),
             method="POST",
         )
