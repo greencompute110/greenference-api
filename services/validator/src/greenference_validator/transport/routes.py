@@ -572,13 +572,9 @@ def list_catalog(visibility: str | None = None) -> list[dict]:
     return [e.model_dump(mode="json") for e in entries]
 
 
-@router.get("/validator/v1/catalog/{model_id}")
-def get_catalog_entry(model_id: str) -> dict:
-    """Public — fetch a single catalog entry."""
-    entry = service.repository.get_catalog_entry(model_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="catalog entry not found")
-    return entry.model_dump(mode="json")
+# NOTE: `/validator/v1/catalog/{model_id}` is defined AFTER the
+# `/catalog/submissions*` routes below so FastAPI doesn't capture
+# "submissions" as a model_id (first-match routing).
 
 
 @router.get("/validator/v1/catalog-status")
@@ -661,6 +657,17 @@ def list_catalog_submissions(
     require_admin_api_key(authorization, x_api_key)
     subs = service.repository.list_catalog_submissions(status=status)
     return [s.model_dump(mode="json") for s in subs]
+
+
+# Defined AFTER /catalog/submissions* routes so FastAPI (first-match) doesn't
+# capture "submissions" as a model_id. Must stay below the submissions GET.
+@router.get("/validator/v1/catalog/{model_id}")
+def get_catalog_entry(model_id: str) -> dict:
+    """Public — fetch a single catalog entry."""
+    entry = service.repository.get_catalog_entry(model_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="catalog entry not found")
+    return entry.model_dump(mode="json")
 
 
 @router.post("/validator/v1/catalog/submissions/{submission_id}/approve")
