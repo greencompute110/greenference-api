@@ -5,6 +5,7 @@ from sqlalchemy import select
 from greenference_persistence import create_db_engine, create_session_factory, init_database, session_scope
 from greenference_persistence.db import needs_bootstrap
 from greenference_persistence.orm import (
+    AuditReportORM,
     CatalogSubmissionORM,
     DeploymentORM,
     GreenEnergyApplicationORM,
@@ -14,12 +15,14 @@ from greenference_persistence.orm import (
     ModelCatalogORM,
     ProbeChallengeORM,
     ProbeResultORM,
+    ScoreCardHistoryORM,
     ScoreCardORM,
     ValidatorCapabilityORM,
     WeightSnapshotORM,
     WorkloadORM,
 )
 from greenference_protocol import (
+    AuditReport,
     CatalogSubmission,
     GreenEnergyApplication,
     GreenEnergyAttachment,
@@ -692,3 +695,159 @@ class ValidatorRepository:
                 lease.status = "terminated"
                 session.add(lease)
             return True
+
+    # --- Audit persistence (chutes-style per-epoch reports) -------------
+
+    def save_scorecard_history(
+        self,
+        *,
+        epoch_id: str,
+        snapshot_id: str | None,
+        scorecards: dict[str, ScoreCard],
+    ) -> int:
+        """Append one row per (hotkey, epoch) to scorecard_history. Called
+        at epoch boundary alongside weight publishing. Returns row count."""
+        from datetime import UTC, datetime
+
+        rows = 0
+        with session_scope(self.session_factory) as session:
+            for hotkey, sc in scorecards.items():
+                session.add(ScoreCardHistoryORM(
+                    epoch_id=epoch_id,
+                    snapshot_id=snapshot_id,
+                    hotkey=hotkey,
+                    capacity_weight=sc.capacity_weight,
+                    reliability_score=sc.reliability_score,
+                    performance_score=sc.performance_score,
+                    security_score=sc.security_score,
+                    fraud_penalty=sc.fraud_penalty,
+                    utilization_score=sc.utilization_score,
+                    rental_revenue_bonus=sc.rental_revenue_bonus,
+                    final_score=sc.final_score,
+                    computed_at=datetime.now(UTC),
+                ))
+                rows += 1
+        return rows
+
+    def save_audit_report(self, report: AuditReport) -> AuditReport:
+        """Upsert an AuditReportORM row by epoch_id."""
+        with session_scope(self.session_factory) as session:
+            row = session.get(AuditReportORM, report.epoch_id) or AuditReportORM(
+                epoch_id=report.epoch_id
+            )
+            row.netuid = report.netuid
+            row.epoch_start_block = report.epoch_start_block
+            row.epoch_end_block = report.epoch_end_block
+            row.report_json = report.report_json
+            row.report_sha256 = report.report_sha256
+            row.signature = report.signature
+            row.signer_hotkey = report.signer_hotkey
+            row.chain_commitment_tx = report.chain_commitment_tx
+            row.created_at = report.created_at
+            session.add(row)
+        return report
+
+    @staticmethod
+    def _audit_report_from_orm(row: AuditReportORM) -> AuditReport:
+        return AuditReport(
+            epoch_id=row.epoch_id,
+            netuid=row.netuid,
+            epoch_start_block=row.epoch_start_block,
+            epoch_end_block=row.epoch_end_block,
+            report_json=row.report_json,
+            report_sha256=row.report_sha256,
+            signature=row.signature,
+            signer_hotkey=row.signer_hotkey,
+            chain_commitment_tx=row.chain_commitment_tx,
+            created_at=row.created_at,
+        )
+
+    def get_audit_report(self, epoch_id: str) -> AuditReport | None:
+        with session_scope(self.session_factory) as session:
+            row = session.get(AuditReportORM, epoch_id)
+            return self._audit_report_from_orm(row) if row else None
+
+    def list_audit_reports(self, limit: int = 100, offset: int = 0) -> list[AuditReport]:
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(
+                select(AuditReportORM)
+                .order_by(AuditReportORM.epoch_end_block.desc())
+                .limit(limit)
+                .offset(offset)
+            ).all()
+            return [self._audit_report_from_orm(r) for r in rows]
+
+    def list_probe_challenges_in_block_range(
+        self, start_block: int, end_block: int
+    ) -> list[ProbeChallenge]:
+        """Not actually filtered by block since we don't persist block number
+        per probe — we filter by timestamp range estimated from block times.
+        Caller passes already-resolved timestamps via `list_probe_challenges_since`."""
+        raise NotImplementedError("use list_probe_challenges_since instead")
+
+    def list_probe_challenges_since(self, since, until):
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(
+                select(ProbeChallengeORM)
+                .where(ProbeChallengeORM.created_at >= since)
+                .where(ProbeChallengeORM.created_at < until)
+                .order_by(ProbeChallengeORM.created_at.asc())
+            ).all()
+            return [
+                ProbeChallenge(
+                    challenge_id=r.challenge_id,
+                    hotkey=r.hotkey,
+                    node_id=r.node_id,
+                    kind=r.kind,
+                    payload=r.payload or {},
+                    created_at=r.created_at,
+                )
+                for r in rows
+            ]
+
+    def list_probe_results_since(self, since, until):
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(
+                select(ProbeResultORM)
+                .where(ProbeResultORM.observed_at >= since)
+                .where(ProbeResultORM.observed_at < until)
+                .order_by(ProbeResultORM.observed_at.asc())
+            ).all()
+            return [
+                ProbeResult(
+                    challenge_id=r.challenge_id,
+                    hotkey=r.hotkey,
+                    node_id=r.node_id,
+                    latency_ms=r.latency_ms,
+                    throughput=r.throughput,
+                    success=r.success,
+                    benchmark_signature=r.benchmark_signature,
+                    proxy_suspected=r.proxy_suspected,
+                    readiness_failures=r.readiness_failures,
+                    prompt_sha256=r.prompt_sha256,
+                    response_sha256=r.response_sha256,
+                    observed_at=r.observed_at,
+                )
+                for r in rows
+            ]
+
+    def list_weight_snapshots_in_block_range(
+        self, netuid: int, start, end
+    ) -> list[WeightSnapshot]:
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(
+                select(WeightSnapshotORM)
+                .where(WeightSnapshotORM.netuid == netuid)
+                .where(WeightSnapshotORM.created_at >= start)
+                .where(WeightSnapshotORM.created_at < end)
+                .order_by(WeightSnapshotORM.created_at.asc())
+            ).all()
+            return [
+                WeightSnapshot(
+                    snapshot_id=r.snapshot_id,
+                    netuid=r.netuid,
+                    weights=r.weights,
+                    created_at=r.created_at,
+                )
+                for r in rows
+            ]

@@ -105,6 +105,65 @@ class BittensorChainClient:
             logger.exception("failed to check registration for %s", hotkey)
             return False
 
+    def current_block_number(self) -> int | None:
+        """Return the current best block number. None on error — callers should
+        treat a None return as 'skip this tick, try again'."""
+        subtensor = self._get_subtensor()
+        try:
+            block = subtensor.get_current_block()
+            return int(block) if block is not None else None
+        except Exception:
+            logger.exception("failed to fetch current block number")
+            return None
+
+    def set_commitment(
+        self,
+        commitment_bytes: bytes,
+        wallet_name: str = "default",
+        hotkey_name: str = "default",
+    ) -> str | None:
+        """Anchor a hash (SHA256 of our audit report JSON) on-chain for this
+        netuid via the `Commitments.set_commitment` pallet. Called once per
+        epoch by `generate_audit_report`. Returns tx_hash on success, None on
+        failure. Input must be ≤ 128 bytes (substrate pallet cap)."""
+        if len(commitment_bytes) > 128:
+            raise ValueError(f"commitment exceeds 128-byte cap: {len(commitment_bytes)}")
+        try:
+            substrate = SubstrateInterface(
+                url=self._resolve_endpoint(),
+                ss58_format=42,
+                type_registry_preset="substrate-node-template",
+                auto_reconnect=True,
+            )
+            if self.wallet_path:
+                keypair = Keypair.create_from_uri(self.wallet_path)
+            else:
+                keypair = Keypair.create_from_uri(f"//{wallet_name}//{hotkey_name}")
+
+            # Commitments pallet expects CommitmentInfo { fields: BoundedVec<Data> }
+            # where Data is a variant including Raw0..Raw64. We use Raw64 for
+            # 32-byte SHA256 digest (fits in Raw64's 0..64 byte payload).
+            hex_payload = "0x" + commitment_bytes.hex()
+            # Use Raw64 variant — most compatible across bittensor chain forks.
+            # Fallback to Raw32 if the chain's metadata only supports that tag.
+            raw_tag = f"Raw{max(32, ((len(commitment_bytes) + 31) // 32) * 32)}"
+            call = substrate.compose_call(
+                call_module="Commitments",
+                call_function="set_commitment",
+                call_params={
+                    "netuid": self.netuid,
+                    "info": {"fields": [[{raw_tag: hex_payload}]]},
+                },
+            )
+            extrinsic = substrate.create_signed_extrinsic(call=call, keypair=keypair)
+            receipt = substrate.submit_extrinsic(extrinsic, wait_for_inclusion=True)
+            tx_hash = receipt.extrinsic_hash if hasattr(receipt, "extrinsic_hash") else str(receipt)
+            logger.info("set_commitment tx submitted: %s (%d bytes)", tx_hash, len(commitment_bytes))
+            return tx_hash
+        except Exception:
+            logger.exception("failed to submit set_commitment on netuid=%d", self.netuid)
+            return None
+
     def set_weights(
         self,
         uids: list[int],

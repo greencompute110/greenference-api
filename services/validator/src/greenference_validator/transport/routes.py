@@ -577,6 +577,79 @@ def list_catalog(visibility: str | None = None) -> list[dict]:
 # "submissions" as a model_id (first-match routing).
 
 
+# ====================================================================
+# Audit — public endpoints for independent verifiers (greenference-audit)
+# ====================================================================
+
+@router.get("/validator/v1/audit/reports")
+def list_audit_reports(limit: int = 100, offset: int = 0) -> dict:
+    """Public — paginated index of audit reports published by this validator.
+    Each entry includes the SHA256 anchored on-chain + its commitment tx."""
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    reports = service.repository.list_audit_reports(limit=limit, offset=offset)
+    return {
+        "reports": [
+            {
+                "epoch_id": r.epoch_id,
+                "netuid": r.netuid,
+                "epoch_start_block": r.epoch_start_block,
+                "epoch_end_block": r.epoch_end_block,
+                "report_sha256": r.report_sha256,
+                "signer_hotkey": r.signer_hotkey,
+                "chain_commitment_tx": r.chain_commitment_tx,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in reports
+        ],
+    }
+
+
+@router.get("/validator/v1/audit/reports/{epoch_id}")
+def get_audit_report(epoch_id: str) -> dict:
+    """Public — full signed audit report for one epoch. Auditors
+    recompute sha256(canonical_json) and verify it matches both the
+    report_sha256 field and the on-chain Commitments entry."""
+    report = service.repository.get_audit_report(epoch_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="audit report not found")
+    return report.model_dump(mode="json")
+
+
+@router.get("/validator/v1/audit/commitment/{epoch_id}")
+def get_audit_commitment(epoch_id: str) -> dict:
+    """Public — just the on-chain anchor info (convenience for
+    low-bandwidth auditors that only care about the SHA256 + tx)."""
+    report = service.repository.get_audit_report(epoch_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="audit report not found")
+    return {
+        "epoch_id": report.epoch_id,
+        "report_sha256": report.report_sha256,
+        "chain_commitment_tx": report.chain_commitment_tx,
+        "signer_hotkey": report.signer_hotkey,
+        "signature": report.signature,
+    }
+
+
+@router.get("/validator/v1/audit/hotkey.pub")
+def get_audit_hotkey() -> dict:
+    """Public — the validator's SS58 hotkey address. Auditors use this to
+    verify the ed25519 signature on each audit report. Same hotkey also
+    signs set_weights and set_commitment on-chain."""
+    hotkey = ""
+    try:
+        chain = getattr(service, "_chain", None)
+        wallet_path = getattr(chain, "wallet_path", None) if chain else None
+        if wallet_path:
+            from substrateinterface import Keypair as _Keypair
+            kp = _Keypair.create_from_uri(wallet_path)
+            hotkey = kp.ss58_address
+    except Exception:
+        pass
+    return {"ss58_address": hotkey}
+
+
 @router.get("/validator/v1/catalog-status")
 def catalog_status() -> dict:
     """Public — running replica counts + recent demand per catalog entry.

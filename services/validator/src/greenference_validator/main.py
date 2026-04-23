@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager, suppress
 
@@ -33,6 +34,7 @@ async def _validator_worker_loop() -> None:
     _metagraph_counter = 0
     _demand_prune_counter = 0
     _canary_counter = 0
+    _last_audited_epoch_end: int | None = None
     flux_every = max(1, int(
         service_settings.flux_rebalance_interval_seconds / settings.worker_poll_interval_seconds
     ))
@@ -45,6 +47,10 @@ async def _validator_worker_loop() -> None:
     canary_every = max(1, int(
         service_settings.inference_canary_interval_seconds / settings.worker_poll_interval_seconds
     ))
+    # Audit epoch check is light (one RPC), run every ~60s so we catch
+    # epoch boundaries promptly without spamming the subtensor RPC.
+    audit_check_every = max(1, int(60.0 / settings.worker_poll_interval_seconds))
+    _audit_counter = 0
     while True:
         try:
             service.process_pending_events()
@@ -64,6 +70,37 @@ async def _validator_worker_loop() -> None:
             if _canary_counter >= canary_every:
                 service.run_attestation_tick()
                 _canary_counter = 0
+
+            # Epoch-boundary hook: publish weights + sign + anchor audit report
+            # on-chain when we cross into a new Bittensor tempo window.
+            _audit_counter += 1
+            if service_settings.bittensor_enabled and _audit_counter >= audit_check_every:
+                _audit_counter = 0
+                try:
+                    chain = getattr(service, "_chain", None)
+                    current_block = chain.current_block_number() if chain else None
+                    if current_block is not None:
+                        epoch_id, start_block, end_block = service._compute_epoch_window(
+                            current_block, chain.netuid,
+                        )
+                        # Only act on freshly-closed epochs we haven't audited yet.
+                        if _last_audited_epoch_end is None or end_block > _last_audited_epoch_end:
+                            # Allow a small buffer (2 blocks) past the boundary so
+                            # late-arriving probes this epoch are captured.
+                            if current_block >= end_block + 2:
+                                service.publish_weight_snapshot(
+                                    netuid=chain.netuid,
+                                    epoch_id=epoch_id,
+                                )
+                                service.generate_audit_report(
+                                    epoch_id=epoch_id,
+                                    start_block=start_block,
+                                    end_block=end_block,
+                                    netuid=chain.netuid,
+                                )
+                                _last_audited_epoch_end = end_block
+                except Exception:
+                    logging.getLogger(__name__).exception("audit-epoch tick failed")
             _worker_state["last_successful_iteration"] = asyncio.get_running_loop().time()
             _worker_state["last_error"] = None
         except Exception as exc:

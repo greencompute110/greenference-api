@@ -7,6 +7,7 @@ from math import ceil
 from greenference_persistence import SubjectBus, WorkflowEventRepository, create_subject_bus, get_metrics_store
 from greenference_persistence.runtime import load_runtime_settings
 from greenference_protocol import (
+    AuditReport,
     ChainWeightCommit,
     FluxRebalanceEvent,
     FluxState,
@@ -141,7 +142,11 @@ class ValidatorService:
         self.metrics.increment("probe.result.recorded")
         return saved
 
-    def publish_weight_snapshot(self, netuid: int = 16) -> WeightSnapshot:
+    def publish_weight_snapshot(self, netuid: int = 16, epoch_id: str | None = None) -> WeightSnapshot:
+        """Compute scorecards for every capable+whitelisted miner, persist them,
+        publish a WeightSnapshot, optionally push to chain, and — if epoch_id is
+        provided — append the scorecard vector to scorecard_history so audits
+        can replay exactly what drove this epoch's weights."""
         scorecards: dict[str, ScoreCard] = {}
         for hotkey, capability in sorted(self.repository.list_capabilities().items()):
             if validator_settings.whitelist_enabled and not self.repository.is_whitelisted(hotkey):
@@ -165,9 +170,21 @@ class ValidatorService:
                 "snapshot_id": saved.snapshot_id,
                 "netuid": saved.netuid,
                 "weights": saved.weights,
+                "epoch_id": epoch_id,
             },
         )
         self.metrics.increment("weights.published")
+
+        # Append-only scorecard history keyed by epoch (audit trail)
+        if epoch_id:
+            try:
+                self.repository.save_scorecard_history(
+                    epoch_id=epoch_id,
+                    snapshot_id=saved.snapshot_id,
+                    scorecards=scorecards,
+                )
+            except Exception:
+                logger.exception("failed to save scorecard history for epoch %s", epoch_id)
 
         # Push to Bittensor chain if enabled
         if self._chain and validator_settings.bittensor_enabled:
@@ -197,6 +214,172 @@ class ValidatorService:
         commit = self._chain.set_weights(uids, weights)
         self.metrics.increment("chain.weights.committed")
         return commit
+
+    # --- Audit (Chutes-style per-epoch signed reports) ---
+
+    AUDIT_EPOCH_LENGTH = 360  # Bittensor tempo for most subnets, incl. netuid 16.
+
+    @classmethod
+    def _compute_epoch_window(cls, current_block: int, netuid: int) -> tuple[str, int, int]:
+        """Return (epoch_id, start_block, end_block) for the epoch that
+        **just closed** at `current_block`. end_block is exclusive."""
+        end_block = (current_block // cls.AUDIT_EPOCH_LENGTH) * cls.AUDIT_EPOCH_LENGTH
+        start_block = end_block - cls.AUDIT_EPOCH_LENGTH
+        return f"{netuid}-{end_block}", start_block, end_block
+
+    def generate_audit_report(
+        self,
+        epoch_id: str,
+        start_block: int,
+        end_block: int,
+        netuid: int | None = None,
+    ) -> AuditReport:
+        """Build a canonical per-epoch audit report and anchor its SHA256
+        on-chain via Commitments.set_commitment. The ScoreEngine formula,
+        probe data, scorecards, and weight snapshot in the report are
+        sufficient for an independent auditor (greenference-audit) to replay
+        our math and verify we didn't fudge weights."""
+        import hashlib
+        import json
+
+        netuid = netuid if netuid is not None else (self._chain.netuid if self._chain else 16)
+
+        # Block-to-timestamp mapping is imperfect (chain block times drift) —
+        # for MVP we bound the probe window by the audit tick's wall-clock
+        # interval around the epoch boundary. At a 12s block time, an epoch
+        # of 360 blocks = 72 minutes; we overshoot by 10 min on each side to
+        # catch late-arriving probe results from the previous epoch.
+        window_hint_seconds = self.AUDIT_EPOCH_LENGTH * 12
+        now = datetime.now(UTC)
+        window_start = now - timedelta(seconds=window_hint_seconds + 600)
+        window_end = now + timedelta(seconds=60)
+
+        challenges = self.repository.list_probe_challenges_since(window_start, window_end)
+        results = self.repository.list_probe_results_since(window_start, window_end)
+        snapshots = self.repository.list_weight_snapshots_in_block_range(
+            netuid, window_start, window_end,
+        )
+        latest_snapshot = snapshots[-1] if snapshots else None
+
+        # Collect every scorecard history row we wrote for this epoch_id —
+        # these are the exact scorecards the weight snapshot was built from.
+        # Query via raw ORM to avoid reshaping the whole repo API surface.
+        from sqlalchemy import select as _select
+        from greenference_persistence import session_scope as _session_scope
+        from greenference_persistence.orm import ScoreCardHistoryORM
+
+        with _session_scope(self.repository.session_factory) as session:
+            rows = session.scalars(
+                _select(ScoreCardHistoryORM)
+                .where(ScoreCardHistoryORM.epoch_id == epoch_id)
+                .order_by(ScoreCardHistoryORM.hotkey.asc())
+            ).all()
+            scorecard_rows = [{
+                "hotkey": r.hotkey,
+                "capacity_weight": r.capacity_weight,
+                "reliability_score": r.reliability_score,
+                "performance_score": r.performance_score,
+                "security_score": r.security_score,
+                "fraud_penalty": r.fraud_penalty,
+                "utilization_score": r.utilization_score,
+                "rental_revenue_bonus": r.rental_revenue_bonus,
+                "final_score": r.final_score,
+                "computed_at": r.computed_at.isoformat() if r.computed_at else None,
+            } for r in rows]
+
+        report_json = {
+            "epoch_id": epoch_id,
+            "netuid": netuid,
+            "epoch_start_block": start_block,
+            "epoch_end_block": end_block,
+            "generated_at": now.isoformat(),
+            "probes": [
+                {
+                    "challenge": {
+                        "challenge_id": c.challenge_id,
+                        "hotkey": c.hotkey,
+                        "node_id": c.node_id,
+                        "kind": c.kind,
+                        "payload": c.payload,
+                        "created_at": c.created_at.isoformat() if c.created_at else None,
+                    },
+                    "results": [
+                        {
+                            "hotkey": r.hotkey,
+                            "latency_ms": r.latency_ms,
+                            "throughput": r.throughput,
+                            "success": r.success,
+                            "benchmark_signature": r.benchmark_signature,
+                            "proxy_suspected": r.proxy_suspected,
+                            "readiness_failures": r.readiness_failures,
+                            "prompt_sha256": r.prompt_sha256,
+                            "response_sha256": r.response_sha256,
+                            "observed_at": r.observed_at.isoformat() if r.observed_at else None,
+                        }
+                        for r in results
+                        if r.challenge_id == c.challenge_id
+                    ],
+                }
+                for c in challenges
+            ],
+            "scorecards": scorecard_rows,
+            "weight_snapshot": (
+                {
+                    "snapshot_id": latest_snapshot.snapshot_id,
+                    "netuid": latest_snapshot.netuid,
+                    "weights": latest_snapshot.weights,
+                    "created_at": latest_snapshot.created_at.isoformat(),
+                }
+                if latest_snapshot else None
+            ),
+        }
+
+        canonical = json.dumps(report_json, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        report_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+        # Sign the canonical bytes with the validator's hotkey. Reuse the
+        # existing auth.sign_payload_hotkey machinery if wallet is loaded;
+        # otherwise skip signing (not fatal — auditors can still verify via
+        # on-chain SHA256 anchor, signature is an extra convenience).
+        signature = ""
+        signer_hotkey = ""
+        if self._chain and validator_settings.bittensor_wallet_path:
+            try:
+                from substrateinterface import Keypair as _Keypair
+                kp = _Keypair.create_from_uri(validator_settings.bittensor_wallet_path)
+                signature = kp.sign(canonical.encode("utf-8")).hex()
+                signer_hotkey = kp.ss58_address
+            except Exception:
+                logger.exception("failed to sign audit report for epoch %s", epoch_id)
+
+        # Anchor hash on-chain via Commitments.set_commitment
+        chain_tx: str | None = None
+        if self._chain and validator_settings.bittensor_enabled:
+            try:
+                chain_tx = self._chain.set_commitment(bytes.fromhex(report_sha256))
+            except Exception:
+                logger.exception("failed to anchor audit report %s on-chain", epoch_id)
+
+        report = AuditReport(
+            epoch_id=epoch_id,
+            netuid=netuid,
+            epoch_start_block=start_block,
+            epoch_end_block=end_block,
+            report_json=report_json,
+            report_sha256=report_sha256,
+            signature=signature,
+            signer_hotkey=signer_hotkey,
+            chain_commitment_tx=chain_tx,
+            created_at=now,
+        )
+        self.repository.save_audit_report(report)
+        self.bus.publish("audit.report.published", {
+            "epoch_id": epoch_id,
+            "report_sha256": report_sha256,
+            "chain_commitment_tx": chain_tx,
+        })
+        self.metrics.increment("audit.report.published")
+        return report
 
     # --- Metagraph sync ---
 
@@ -411,12 +594,17 @@ class ValidatorService:
 
     def run_inference_canary(self, hotkey: str, model_id: str) -> ProbeResult:
         """Fire a canary chat-completion against the gateway and score the
-        response. Result gets persisted as a ProbeResult so existing
-        reliability / fraud-penalty scoring picks it up — no new scoring
-        math needed. Records latency, shape-compliance signature, and
-        whether the serving miner matched the expected hotkey."""
+        response.
+
+        A.5 hardening: the prompt is now **nonce-bearing** — we instruct the
+        miner to echo back a fresh random token. An honest miner serving the
+        actual model emits the nonce verbatim; a miner returning canned
+        responses or proxying to a cache/OpenAI key without the nonce gets
+        flagged as failed. The exact prompt + response SHA256 go into the
+        ProbeResult so independent auditors can re-verify the check."""
         import hashlib
         import json
+        import secrets
         import time as _time
         from urllib.error import HTTPError
         from urllib.request import Request, urlopen
@@ -425,13 +613,34 @@ class ValidatorService:
         if cap is None:
             raise UnknownCapabilityError(f"capability not found for hotkey={hotkey}")
 
-        challenge = self.create_probe(hotkey, cap.node_id, kind="inference_verification")
+        # Generate a fresh 8-byte nonce for this probe. Present both as a
+        # prompt token the miner must echo + a commit value the miner must
+        # include. Both are embedded in challenge.payload so auditors see
+        # the exact test we asked.
+        nonce = secrets.token_hex(8)
+        prompt = (
+            f"You will receive a token. Echo it back verbatim as the first "
+            f"word of your reply. Your reply must start exactly with the "
+            f"token followed by a space and the word DONE. Token: {nonce}"
+        )
+        expected_prefix = f"{nonce} DONE"
+
+        challenge = ProbeChallenge(
+            hotkey=hotkey,
+            node_id=cap.node_id,
+            kind="inference_verification",
+            payload={
+                "model_id": model_id,
+                "prompt": prompt,
+                "nonce": nonce,
+                "expected_prefix": expected_prefix,
+            },
+        )
+        challenge = self.repository.save_challenge(challenge)
 
         gw = validator_settings.gateway_url
         key = validator_settings.inference_canary_api_key
         if not gw or not key:
-            # No gateway wired → record a no-op failure rather than raising,
-            # so admin triggering the endpoint sees a clear signal.
             result = ProbeResult(
                 challenge_id=challenge.challenge_id,
                 hotkey=hotkey,
@@ -440,25 +649,21 @@ class ValidatorService:
                 throughput=0.0,
                 success=False,
                 readiness_failures=1,
+                prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
             )
             return self.repository.add_result(result)
 
         body = {
             "model": model_id,
-            "messages": [
-                {"role": "user", "content": "Reply exactly: OK"},
-            ],
-            "max_tokens": 8,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 32,
             "stream": False,
         }
         data = json.dumps(body).encode()
         req = Request(
             gw.rstrip("/") + "/v1/chat/completions",
             data=data,
-            headers={
-                "Content-Type": "application/json",
-                "X-API-Key": key,
-            },
+            headers={"Content-Type": "application/json", "X-API-Key": key},
             method="POST",
         )
         started = _time.perf_counter()
@@ -467,6 +672,8 @@ class ValidatorService:
         signature: str | None = None
         tokens = 0
         readiness_failures = 0
+        response_text = ""
+        proxy_suspected = False
         try:
             with urlopen(req, timeout=validator_settings.inference_canary_timeout_seconds) as resp:
                 payload = json.loads(resp.read())
@@ -474,21 +681,41 @@ class ValidatorService:
             choices = payload.get("choices") or []
             content = (choices[0].get("message") or {}).get("content") if choices else None
             if content and isinstance(content, str):
-                success = True
-                norm = content.strip().upper()[:32]
-                signature = hashlib.sha256(f"{model_id}:{norm}".encode()).hexdigest()[:16]
+                response_text = content.strip()
+                # Hardened check: miner must echo the nonce verbatim. Case-
+                # insensitive match on the expected prefix — some models add
+                # leading whitespace or casing quirks. But the nonce itself
+                # (hex) must appear literally.
+                if nonce in response_text:
+                    success = True
+                    # Signature now encodes model + response prefix; auditors
+                    # can recompute it to catch miners that modified their
+                    # output post-hoc.
+                    norm = response_text.upper()[:64]
+                    signature = hashlib.sha256(f"{model_id}:{nonce}:{norm}".encode()).hexdigest()[:16]
+                else:
+                    # Nonce missing = response did not come from a real
+                    # inference on THIS prompt. Either cached, pre-computed,
+                    # or proxied from a different prompt. Flag as proxy.
+                    proxy_suspected = True
+                    logger.warning(
+                        "probe %s: miner %s response missing nonce %s (response=%r)",
+                        challenge.challenge_id, hotkey, nonce, response_text[:80],
+                    )
             usage = payload.get("usage") or {}
             tokens = int(usage.get("completion_tokens", 0) or 0)
         except HTTPError as exc:
             latency_ms = (_time.perf_counter() - started) * 1000.0
             readiness_failures = 1
             logger.warning("inference canary http %s for %s: %s", exc.code, model_id, exc.reason)
-        except Exception as exc:  # noqa: BLE001 — broad is fine, we're scoring a probe
+        except Exception as exc:  # noqa: BLE001 — probe-scoped catch
             latency_ms = (_time.perf_counter() - started) * 1000.0
             readiness_failures = 1
             logger.warning("inference canary error for %s: %s", model_id, exc)
 
         throughput = (tokens / max(latency_ms, 1.0)) * 1000.0 if success else 0.0
+        prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+        response_hash = hashlib.sha256(response_text.encode()).hexdigest() if response_text else None
         result = ProbeResult(
             challenge_id=challenge.challenge_id,
             hotkey=hotkey,
@@ -497,10 +724,15 @@ class ValidatorService:
             throughput=throughput,
             success=success,
             benchmark_signature=signature,
+            proxy_suspected=proxy_suspected,
             readiness_failures=readiness_failures,
+            prompt_sha256=prompt_hash,
+            response_sha256=response_hash,
         )
         saved = self.repository.add_result(result)
         self.metrics.increment(f"probe.inference.{'success' if success else 'failure'}")
+        if proxy_suspected:
+            self.metrics.increment("probe.inference.proxy_suspected")
         return saved
 
     def run_attestation_tick(self) -> ProbeResult | None:

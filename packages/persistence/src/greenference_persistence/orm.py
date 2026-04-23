@@ -419,6 +419,10 @@ class ProbeResultORM(Base):
     benchmark_signature: Mapped[str | None] = mapped_column(String(256), nullable=True)
     proxy_suspected: Mapped[bool] = mapped_column(Boolean, default=False)
     readiness_failures: Mapped[int] = mapped_column(Integer, default=0)
+    # A.5 audit-trail columns: digests of the exact prompt sent + response
+    # received, so auditors can spot miners serving canned / proxied output.
+    prompt_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    response_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -435,6 +439,48 @@ class ScoreCardORM(Base):
     rental_revenue_bonus: Mapped[float] = mapped_column(Float, default=0.0)
     final_score: Mapped[float] = mapped_column(Float, index=True)
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ScoreCardHistoryORM(Base):
+    """Append-only history of scorecards, one row per (hotkey, epoch) pair.
+
+    ScoreCardORM keeps 'latest wins' for fast queries; this table is what
+    auditors need to re-derive the weights we published each epoch."""
+
+    __tablename__ = "scorecard_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    epoch_id: Mapped[str] = mapped_column(String(64), index=True)
+    snapshot_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    hotkey: Mapped[str] = mapped_column(String(128), index=True)
+    capacity_weight: Mapped[float] = mapped_column(Float)
+    reliability_score: Mapped[float] = mapped_column(Float)
+    performance_score: Mapped[float] = mapped_column(Float)
+    security_score: Mapped[float] = mapped_column(Float)
+    fraud_penalty: Mapped[float] = mapped_column(Float)
+    utilization_score: Mapped[float] = mapped_column(Float, default=1.0)
+    rental_revenue_bonus: Mapped[float] = mapped_column(Float, default=0.0)
+    final_score: Mapped[float] = mapped_column(Float)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class AuditReportORM(Base):
+    """Per-epoch audit report — the canonical artifact that independent
+    auditors (greenference-audit) fetch, SHA256-check against the on-chain
+    Commitments hash, and use to replay our scoring math."""
+
+    __tablename__ = "audit_reports"
+
+    epoch_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    netuid: Mapped[int] = mapped_column(Integer, index=True)
+    epoch_start_block: Mapped[int] = mapped_column(Integer)
+    epoch_end_block: Mapped[int] = mapped_column(Integer, index=True)
+    report_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    report_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    signature: Mapped[str] = mapped_column(Text, default="")
+    signer_hotkey: Mapped[str] = mapped_column(String(128), default="")
+    chain_commitment_tx: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
 class WeightSnapshotORM(Base):
