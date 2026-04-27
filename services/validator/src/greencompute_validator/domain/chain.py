@@ -2,14 +2,42 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
 from greencompute_protocol import ChainWeightCommit, MetagraphEntry
 from substrateinterface import SubstrateInterface, Keypair
 
 logger = logging.getLogger(__name__)
+
+
+def _load_keypair_from_wallet_file(wallet_path: str) -> Keypair:
+    """Load a Bittensor wallet hotkey/coldkey file and return a Keypair.
+
+    `Keypair.create_from_uri(path)` is WRONG here — it treats the string as
+    an sr25519 derivation URI like `//Alice`, producing a fresh test keypair
+    rather than the real wallet's keypair. The chain then rejects extrinsics
+    signed by that wrong hotkey with `Custom error: 1` (NotRegistered).
+
+    Bittensor wallet files are JSON with `secretSeed` (or `privateKey`) —
+    read that, hand to `create_from_seed()`. Path examples:
+      ~/.bittensor/wallets/<coldkey>/hotkeys/<name>     (hotkey)
+      ~/.bittensor/wallets/<coldkey>/coldkey            (coldkey, signs stake)
+    """
+    p = Path(wallet_path).expanduser()
+    if not p.is_file():
+        raise FileNotFoundError(f"wallet file not found: {p}")
+    with p.open() as f:
+        data = json.load(f)
+    seed = data.get("secretSeed") or data.get("privateKey") or data.get("seed") or data.get("private_key")
+    if not seed:
+        raise ValueError(f"no secretSeed/privateKey in {p}")
+    if isinstance(seed, str) and seed.startswith("0x"):
+        seed = seed[2:]
+    return Keypair.create_from_seed(seed)
 
 
 def _restore_logging() -> None:
@@ -144,8 +172,10 @@ class BittensorChainClient:
                 auto_reconnect=True,
             )
             if self.wallet_path:
-                keypair = Keypair.create_from_uri(self.wallet_path)
+                keypair = _load_keypair_from_wallet_file(self.wallet_path)
             else:
+                # Fallback for local dev — Subkey-style derivation URI.
+                # Real production deployments must set BITTENSOR_WALLET_PATH.
                 keypair = Keypair.create_from_uri(f"//{wallet_name}//{hotkey_name}")
 
             # Commitments pallet expects CommitmentInfo { fields: BoundedVec<Data> }
@@ -192,9 +222,12 @@ class BittensorChainClient:
             )
 
             if self.wallet_path:
-                keypair = Keypair.create_from_uri(self.wallet_path)
+                keypair = _load_keypair_from_wallet_file(self.wallet_path)
             else:
+                # Fallback for local dev — Subkey-style derivation URI.
+                # Real production deployments must set BITTENSOR_WALLET_PATH.
                 keypair = Keypair.create_from_uri(f"//{wallet_name}//{hotkey_name}")
+            print(f"[CHAIN COMMIT] signing set_weights with ss58={keypair.ss58_address}", flush=True)
 
             call = substrate.compose_call(
                 call_module="SubtensorModule",
