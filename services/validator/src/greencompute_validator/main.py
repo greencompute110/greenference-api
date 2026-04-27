@@ -51,6 +51,18 @@ async def _validator_worker_loop() -> None:
     # epoch boundaries promptly without spamming the subtensor RPC.
     audit_check_every = max(1, int(60.0 / settings.worker_poll_interval_seconds))
     _audit_counter = 0
+
+    # Eager initial metagraph sync — without this the in-memory cache stays
+    # empty until the first tick fires, and any /weights call in that window
+    # bails with "no valid uids for set_weights" because hotkey→uid lookups
+    # all return None. Cheap one-shot sync at startup avoids the gap.
+    if service_settings.bittensor_enabled:
+        try:
+            entries = service.sync_metagraph()
+            print(f"[STARTUP] initial metagraph sync: {len(entries)} entries", flush=True)
+        except Exception as exc:
+            print(f"[STARTUP] initial metagraph sync failed: {type(exc).__name__}: {exc}", flush=True)
+
     while True:
         try:
             service.process_pending_events()
