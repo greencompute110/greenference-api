@@ -196,31 +196,50 @@ class ValidatorService:
                 logger.exception("failed to save scorecard history for epoch %s", epoch_id)
 
         # Push to Bittensor chain if enabled
+        print(
+            f"[CHAIN PUBLISH] scorecards={len(scorecards)} chain_init={self._chain is not None} "
+            f"bittensor_enabled={validator_settings.bittensor_enabled} netuid={netuid}",
+            flush=True,
+        )
         if self._chain and validator_settings.bittensor_enabled:
             try:
-                self._commit_weights_to_chain(scorecards)
-            except Exception:
+                commit = self._commit_weights_to_chain(scorecards)
+                print(f"[CHAIN PUBLISH] _commit_weights_to_chain returned: {commit!r}", flush=True)
+            except Exception as exc:
+                print(f"[CHAIN PUBLISH] EXCEPTION: {type(exc).__name__}: {exc}", flush=True)
                 logger.exception("failed to commit weights to chain")
+        else:
+            print(
+                f"[CHAIN PUBLISH] SKIPPED — chain={self._chain is not None} "
+                f"bittensor_enabled={validator_settings.bittensor_enabled}",
+                flush=True,
+            )
 
         return saved
 
     def _commit_weights_to_chain(self, scorecards: dict[str, ScoreCard]) -> ChainWeightCommit | None:
         """Convert scorecards to uid/weight vectors and call set_weights."""
         if not self._chain:
+            print("[CHAIN COMMIT] no chain client, returning None", flush=True)
             return None
+        print(f"[CHAIN COMMIT] mapping {len(scorecards)} scorecards to UIDs; metagraph_size={self.metagraph.size}", flush=True)
         uids: list[int] = []
         weights: list[float] = []
         for hotkey, sc in sorted(scorecards.items()):
             uid = self.metagraph.hotkey_to_uid(hotkey)
+            print(f"[CHAIN COMMIT]   hotkey={hotkey} score={sc.final_score:.4f} uid={uid}", flush=True)
             if uid is None:
                 logger.warning("hotkey %s not in metagraph, skipping weight", hotkey)
                 continue
             uids.append(uid)
             weights.append(sc.final_score)
         if not uids:
+            print("[CHAIN COMMIT] no valid uids for set_weights — bailing", flush=True)
             logger.warning("no valid uids for set_weights")
             return None
+        print(f"[CHAIN COMMIT] calling _chain.set_weights uids={uids} weights={weights}", flush=True)
         commit = self._chain.set_weights(uids, weights)
+        print(f"[CHAIN COMMIT] set_weights returned: {commit!r}", flush=True)
         self.metrics.increment("chain.weights.committed")
         return commit
 
