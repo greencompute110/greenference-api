@@ -33,14 +33,18 @@ _cache: dict[str, tuple[float, float]] = {}  # currency -> (price, timestamp)
 # little-endian-encoded u16 netuid. Matches the on-chain query used by
 # btcli / explorer tools to read AMM pool state.
 #
-#   _STORAGE_PREFIX_SUBNET_TAO  → reserve of TAO in the subnet pool
 #   _STORAGE_PREFIX_SUBNET_ALPHA → reserve of Alpha in the subnet pool
+#                                  (much larger number — alpha is minted
+#                                  abundantly per subnet)
+#   _STORAGE_PREFIX_SUBNET_TAO  → reserve of TAO in the subnet pool
+#                                  (much smaller — TAO is scarce liquidity)
 #
-# Alpha price (in TAO) = SubnetTAO / SubnetAlphaIn.
-_STORAGE_PREFIX_SUBNET_TAO = (
+# Alpha price (in TAO) = SubnetTAO / SubnetAlphaIn
+# For netuid 110 with ~1000 TAO and ~183k Alpha → 1 Alpha ≈ 0.0054 TAO.
+_STORAGE_PREFIX_SUBNET_ALPHA = (
     "0x658faa385070e074c85bf6b568cf05552ce12f7007574647d692ac7edf8b7a53"
 )
-_STORAGE_PREFIX_SUBNET_ALPHA = (
+_STORAGE_PREFIX_SUBNET_TAO = (
     "0x658faa385070e074c85bf6b568cf05557a57dce016211512d1700561066b85a3"
 )
 
