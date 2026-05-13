@@ -10,10 +10,13 @@ from greencompute_gateway.infrastructure.billing_repository import BillingReposi
 log = logging.getLogger(__name__)
 
 # Bonus rates keyed by the base currency (chain suffix stripped for lookup).
+# Stablecoins (USDT/USDC) are par with USD and get no bonus — we already
+# don't pay any FX/spread on them. Crypto rails (TAO/Alpha) get a bonus to
+# offset their volatility AND to push demand toward subnet-aligned rails.
 BONUS_RATES: dict[str, float] = {
     "stripe": 0.00,
-    "usdt": 0.05,
-    "usdc": 0.05,
+    "usdt": 0.00,
+    "usdc": 0.00,
     "tao": 0.10,
     "alpha": 0.10,
 }
