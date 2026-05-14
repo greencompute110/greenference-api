@@ -1648,6 +1648,77 @@ def billing_bonus_rates() -> dict:
     return {k: f"+{int(v*100)}%" for k, v in BONUS_RATES.items()}
 
 
+# ---------------------------------------------------------------------------
+# Admin commercial analytics
+#
+# All routes here require an admin API key. Aggregations are bounded by
+# `days` (capped server-side in AnalyticsRepository) so curling silly windows
+# can't take the DB down. Each panel has its own endpoint — UI fetches in
+# parallel so one slow query doesn't block the rest.
+# ---------------------------------------------------------------------------
+
+
+def _analytics_repo():
+    """Cached per-process instance — same DB engine reuse pattern as
+    BillingRepository elsewhere in this file."""
+    from greencompute_gateway.infrastructure.analytics_repository import (
+        AnalyticsRepository,
+    )
+
+    return AnalyticsRepository()
+
+
+@router.get("/platform/admin/analytics/revenue-by-miner")
+def analytics_revenue_by_miner(
+    days: int = Query(default=7, ge=1, le=365),
+    limit: int = Query(default=100, ge=1, le=500),
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    rows = _analytics_repo().revenue_by_miner(days=days, limit=limit)
+    return {
+        "window_days": days,
+        "total_cents_earned": sum(r["cents_earned"] for r in rows),
+        "rows": rows,
+    }
+
+
+@router.get("/platform/admin/analytics/top-renters")
+def analytics_top_renters(
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=25, ge=1, le=200),
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    rows = _analytics_repo().top_renters(days=days, limit=limit)
+    return {
+        "window_days": days,
+        "total_cents_spent": sum(r["cents_spent"] for r in rows),
+        "rows": rows,
+    }
+
+
+@router.get("/platform/admin/analytics/gross-revenue")
+def analytics_gross_revenue(
+    days: int = Query(default=30, ge=1, le=365),
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return _analytics_repo().gross_revenue(days=days)
+
+
+@router.get("/platform/admin/analytics/active-rentals")
+def analytics_active_rentals(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return _analytics_repo().active_rentals()
+
+
 @router.post("/platform/billing/admin/credit")
 def billing_admin_credit(
     payload: dict,
