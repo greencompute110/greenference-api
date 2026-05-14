@@ -170,6 +170,7 @@ class GatewayRepository:
             row.company = inquiry.company
             row.gpu_count = inquiry.gpu_count
             row.duration = inquiry.duration
+            row.deployment_date = inquiry.deployment_date
             row.budget = inquiry.budget
             row.use_case = inquiry.use_case
             row.source_ip = inquiry.source_ip
@@ -241,6 +242,7 @@ class GatewayRepository:
             company=row.company or "",
             gpu_count=row.gpu_count,
             duration=row.duration or "",
+            deployment_date=getattr(row, "deployment_date", "") or "",
             budget=row.budget or "",
             use_case=row.use_case or "",
             source_ip=row.source_ip,

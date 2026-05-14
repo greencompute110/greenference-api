@@ -529,6 +529,7 @@ class GatewayService:
             company=request.company,
             gpu_count=request.gpu_count,
             duration=request.duration,
+            deployment_date=request.deployment_date,
             budget=request.budget,
             use_case=request.use_case,
             source_ip=source_ip,

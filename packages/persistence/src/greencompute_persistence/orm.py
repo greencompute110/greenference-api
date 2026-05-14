@@ -776,6 +776,7 @@ class CommercialInquiryORM(Base):
     company: Mapped[str] = mapped_column(String(255), default="")
     gpu_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     duration: Mapped[str] = mapped_column(String(128), default="")
+    deployment_date: Mapped[str] = mapped_column(String(64), default="")
     budget: Mapped[str] = mapped_column(String(128), default="")
     use_case: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)

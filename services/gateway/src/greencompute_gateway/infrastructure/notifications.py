@@ -87,6 +87,8 @@ def _format_inquiry(inquiry: CommercialInquiryRecord) -> str:
         parts.append(f"GPUs: {inquiry.gpu_count}")
     if inquiry.duration:
         parts.append(f"Duration: {inquiry.duration}")
+    if inquiry.deployment_date:
+        parts.append(f"Target date: {inquiry.deployment_date}")
     if inquiry.budget:
         parts.append(f"Budget: {inquiry.budget}")
     if inquiry.use_case:
