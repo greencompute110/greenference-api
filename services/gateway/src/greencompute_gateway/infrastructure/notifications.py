@@ -23,7 +23,7 @@ import os
 import urllib.error
 import urllib.request
 
-from greencompute_protocol import CommercialInquiryRecord
+from greencompute_protocol import BareMetalInquiryRecord, CommercialInquiryRecord
 
 log = logging.getLogger(__name__)
 
@@ -104,6 +104,53 @@ def notify_commercial_inquiry(inquiry: CommercialInquiryRecord) -> None:
     url = os.environ.get("SALES_WEBHOOK_URL", "").strip()
     kind = os.environ.get("SALES_WEBHOOK_KIND", "slack")
     _post_webhook(url, kind, _format_inquiry(inquiry))
+
+
+def _format_bare_metal(inquiry: BareMetalInquiryRecord) -> str:
+    parts = [
+        "*[Bare-metal] New inquiry*",
+        f"Email: {inquiry.email}",
+    ]
+    if inquiry.name:
+        parts.append(f"Name: {inquiry.name}")
+    if inquiry.company:
+        parts.append(f"Company: {inquiry.company}")
+    if inquiry.card_type:
+        parts.append(f"Card: {inquiry.card_type.upper()}")
+    if inquiry.node_count is not None:
+        parts.append(f"Nodes: {inquiry.node_count}")
+    if inquiry.required_vram_gb is not None:
+        parts.append(f"Required VRAM: {inquiry.required_vram_gb} GB")
+    if inquiry.storage_gb_per_node is not None:
+        parts.append(f"Storage / node: {inquiry.storage_gb_per_node} GB")
+    if inquiry.work_type:
+        parts.append(f"Work type: {inquiry.work_type}")
+    if inquiry.duration:
+        parts.append(f"Duration: {inquiry.duration}")
+    if inquiry.deployment_date:
+        parts.append(f"Target date: {inquiry.deployment_date}")
+    if inquiry.notes:
+        snippet = inquiry.notes[:500]
+        if len(inquiry.notes) > 500:
+            snippet += "…"
+        parts.append(f"Notes: {snippet}")
+    parts.append(f"Inquiry ID: {inquiry.inquiry_id}")
+    return "\n".join(parts)
+
+
+def notify_bare_metal_inquiry(inquiry: BareMetalInquiryRecord) -> None:
+    """Dedicated channel via BARE_METAL_WEBHOOK_URL; falls back to the same
+    SALES_WEBHOOK_URL as commercial leads (with a [Bare-metal] prefix so
+    the receiver can tell them apart)."""
+    url = (
+        os.environ.get("BARE_METAL_WEBHOOK_URL", "").strip()
+        or os.environ.get("SALES_WEBHOOK_URL", "").strip()
+    )
+    kind = (
+        os.environ.get("BARE_METAL_WEBHOOK_KIND", "").strip()
+        or os.environ.get("SALES_WEBHOOK_KIND", "slack")
+    )
+    _post_webhook(url, kind, _format_bare_metal(inquiry))
 
 
 # --- Ops alerts -----------------------------------------------------------

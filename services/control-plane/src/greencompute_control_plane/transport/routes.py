@@ -789,8 +789,17 @@ def platform_metrics(
 
 @router.get("/platform/v1/gpu-pool")
 def gpu_pool() -> list[dict]:
-    """Public endpoint: aggregated GPU availability for the rental page."""
+    """Public endpoint: aggregated GPU availability for the rental page.
+
+    If an admin set a `gpu_capacity_overrides` row for a GPU class, the
+    override REPLACES the measured count — sales uses this to advertise
+    contracted cluster size before miners are fully live. Without an
+    override, falls back to the measured count. Reads overrides via raw
+    SQL so the control-plane doesn't have to import gateway code.
+    """
     from collections import defaultdict
+    from sqlalchemy import text
+
     all_nodes = service.repository.list_nodes()
     buckets: dict[str, dict] = defaultdict(lambda: {
         "gpu_model": "",
@@ -798,6 +807,7 @@ def gpu_pool() -> list[dict]:
         "total_gpus": 0,
         "available_gpus": 0,
         "node_count": 0,
+        "overridden": False,
     })
     for node in all_nodes:
         if service._is_node_stale(node):
@@ -809,4 +819,30 @@ def gpu_pool() -> list[dict]:
         b["total_gpus"] += node.gpu_count or 0
         b["available_gpus"] += node.available_gpus or 0
         b["node_count"] += 1
+
+    # Merge admin overrides. Wrapped so a missing table (migration not run
+    # yet) silently falls through to measured counts.
+    try:
+        with service.repository.session_factory() as session:
+            rows = session.execute(
+                text(
+                    "SELECT gpu_model, total_gpus, available_gpus, note "
+                    "FROM gpu_capacity_overrides"
+                )
+            ).all()
+            for row in rows:
+                key = (row.gpu_model or "unknown").lower()
+                b = buckets[key]
+                if not b["gpu_model"]:
+                    # No live nodes for this class yet — surface the
+                    # contracted hardware anyway so sales can pre-advertise.
+                    b["gpu_model"] = row.gpu_model or "unknown"
+                b["total_gpus"] = int(row.total_gpus or 0)
+                b["available_gpus"] = int(row.available_gpus or 0)
+                b["overridden"] = True
+                if row.note:
+                    b["note"] = row.note
+    except Exception:
+        pass
+
     return sorted(buckets.values(), key=lambda b: -b["available_gpus"])

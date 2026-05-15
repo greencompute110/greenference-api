@@ -8,12 +8,14 @@ from fastapi.responses import StreamingResponse
 from greencompute_protocol import (
     APIKeyCreateRequest,
     APIKeySummary,
+    BareMetalInquiryCreateRequest,
     BuildContextUploadRequest,
     BuildRequest,
     ChatCompletionRequest,
     CommercialInquiryCreateRequest,
     DeploymentCreateRequest,
     DeploymentUpdateRequest,
+    GpuCapacityOverride,
     UserProfileUpdateRequest,
     UserSecretCreateRequest,
     UserRegistrationRequest,
@@ -983,6 +985,127 @@ def update_commercial_inquiry(
         ).model_dump(mode="json")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Bare-metal inquiries — dedicated /rental sales form
+# ---------------------------------------------------------------------------
+
+
+@router.post("/platform/sales/bare-metal-inquiries", status_code=201)
+def create_bare_metal_inquiry(
+    payload: BareMetalInquiryCreateRequest,
+    request: Request,
+) -> dict:
+    """Public — no auth. Same hardening as commercial inquiries."""
+    enforce_rate_limit(
+        "bare_metal_inquiry", _client_ip(request), limit=10, window_seconds=3600
+    )
+    try:
+        inquiry = service.submit_bare_metal_inquiry(
+            payload,
+            source_ip=_client_ip(request),
+            user_agent=(request.headers.get("user-agent") or "")[:512],
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    return {"inquiry_id": inquiry.inquiry_id, "status": inquiry.status}
+
+
+@router.get("/platform/sales/bare-metal-inquiries")
+def list_bare_metal_inquiries(
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return [
+        inq.model_dump(mode="json")
+        for inq in service.list_bare_metal_inquiries(
+            status=status, limit=limit, offset=offset
+        )
+    ]
+
+
+@router.patch("/platform/sales/bare-metal-inquiries/{inquiry_id}")
+def update_bare_metal_inquiry(
+    inquiry_id: str,
+    body: dict,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    status = str(body.get("status") or "").strip()
+    if status not in {"new", "contacted", "won", "lost"}:
+        raise HTTPException(status_code=400, detail="status must be one of new|contacted|won|lost")
+    review_notes = body.get("review_notes")
+    if review_notes is not None:
+        review_notes = str(review_notes)[:5000]
+    try:
+        return service.update_bare_metal_inquiry_status(
+            inquiry_id, status=status, review_notes=review_notes
+        ).model_dump(mode="json")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# GPU capacity overrides — admin-controlled cluster size for /capacity & /rental
+# ---------------------------------------------------------------------------
+
+
+@router.get("/platform/admin/capacity-overrides")
+def list_capacity_overrides(
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> list[dict]:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    return [
+        ov.model_dump(mode="json") for ov in service.list_gpu_capacity_overrides()
+    ]
+
+
+@router.put("/platform/admin/capacity-overrides/{gpu_model}")
+def upsert_capacity_override(
+    gpu_model: str,
+    body: dict,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    api_key = require_api_key(authorization, x_api_key, admin_required=True)
+    try:
+        total = int(body.get("total_gpus") or 0)
+        avail = int(body.get("available_gpus") or 0)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="total_gpus and available_gpus must be integers") from exc
+    if total < 0 or avail < 0:
+        raise HTTPException(status_code=400, detail="counts must be non-negative")
+    if avail > total:
+        raise HTTPException(status_code=400, detail="available_gpus cannot exceed total_gpus")
+    override = GpuCapacityOverride(
+        gpu_model=gpu_model,
+        total_gpus=total,
+        available_gpus=avail,
+        note=str(body.get("note") or "")[:255],
+        updated_by=(api_key.user_id or api_key.name or "admin"),
+    )
+    saved = service.upsert_gpu_capacity_override(override)
+    return saved.model_dump(mode="json")
+
+
+@router.delete("/platform/admin/capacity-overrides/{gpu_model}")
+def delete_capacity_override(
+    gpu_model: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    require_api_key(authorization, x_api_key, admin_required=True)
+    deleted = service.delete_gpu_capacity_override(gpu_model)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="override not found")
+    return {"deleted": True, "gpu_model": gpu_model}
 
 
 @router.post("/v1/chat/completions")

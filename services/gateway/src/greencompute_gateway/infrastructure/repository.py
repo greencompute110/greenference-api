@@ -9,14 +9,18 @@ from greencompute_persistence import create_db_engine, create_session_factory, i
 from greencompute_persistence.db import needs_bootstrap
 from greencompute_persistence.orm import (
     APIKeyORM,
+    BareMetalInquiryORM,
     CommercialInquiryORM,
+    GpuCapacityOverrideORM,
     UserORM,
     UserSecretORM,
     WorkloadShareORM,
 )
 from greencompute_protocol import (
     APIKeyRecord,
+    BareMetalInquiryRecord,
     CommercialInquiryRecord,
+    GpuCapacityOverride,
     UserRecord,
     UserSecretRecord,
     WorkloadShareRecord,
@@ -232,6 +236,156 @@ class GatewayRepository:
             row.reviewed_at = utcnow()
             session.add(row)
             return self._to_inquiry(row)
+
+    # --- Bare-metal inquiries (dedicated /rental sales form) ------------
+
+    def save_bare_metal_inquiry(self, inquiry: BareMetalInquiryRecord) -> BareMetalInquiryRecord:
+        with session_scope(self.session_factory) as session:
+            row = (
+                session.get(BareMetalInquiryORM, inquiry.inquiry_id)
+                or BareMetalInquiryORM(inquiry_id=inquiry.inquiry_id)
+            )
+            row.name = inquiry.name
+            row.email = inquiry.email
+            row.company = inquiry.company
+            row.card_type = inquiry.card_type
+            row.node_count = inquiry.node_count
+            row.required_vram_gb = inquiry.required_vram_gb
+            row.storage_gb_per_node = inquiry.storage_gb_per_node
+            row.work_type = inquiry.work_type
+            row.deployment_date = inquiry.deployment_date
+            row.duration = inquiry.duration
+            row.notes = inquiry.notes
+            row.source_ip = inquiry.source_ip
+            row.user_agent = inquiry.user_agent
+            row.status = inquiry.status
+            row.review_notes = inquiry.review_notes
+            row.submitted_at = inquiry.submitted_at
+            row.reviewed_at = inquiry.reviewed_at
+            session.add(row)
+        return inquiry
+
+    def list_bare_metal_inquiries(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[BareMetalInquiryRecord]:
+        with session_scope(self.session_factory) as session:
+            stmt = select(BareMetalInquiryORM).order_by(
+                BareMetalInquiryORM.submitted_at.desc()
+            )
+            if status:
+                stmt = stmt.where(BareMetalInquiryORM.status == status)
+            rows = session.scalars(stmt.offset(offset).limit(limit)).all()
+            return [self._to_bare_metal_inquiry(row) for row in rows]
+
+    def count_bare_metal_inquiries_from_ip_since(
+        self, source_ip: str, since_seconds: int
+    ) -> int:
+        from datetime import timedelta
+        from greencompute_persistence.orm import utcnow
+
+        if not source_ip:
+            return 0
+        cutoff = utcnow() - timedelta(seconds=since_seconds)
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(
+                select(BareMetalInquiryORM).where(
+                    BareMetalInquiryORM.source_ip == source_ip,
+                    BareMetalInquiryORM.submitted_at >= cutoff,
+                )
+            ).all()
+            return len(rows)
+
+    def update_bare_metal_inquiry_status(
+        self, inquiry_id: str, *, status: str, review_notes: str | None = None
+    ) -> BareMetalInquiryRecord | None:
+        from greencompute_persistence.orm import utcnow
+
+        with session_scope(self.session_factory) as session:
+            row = session.get(BareMetalInquiryORM, inquiry_id)
+            if row is None:
+                return None
+            row.status = status
+            if review_notes is not None:
+                row.review_notes = review_notes
+            row.reviewed_at = utcnow()
+            session.add(row)
+            return self._to_bare_metal_inquiry(row)
+
+    @staticmethod
+    def _to_bare_metal_inquiry(row: BareMetalInquiryORM) -> BareMetalInquiryRecord:
+        return BareMetalInquiryRecord(
+            inquiry_id=row.inquiry_id,
+            name=row.name or "",
+            email=row.email,
+            company=row.company or "",
+            card_type=row.card_type or "",
+            node_count=row.node_count,
+            required_vram_gb=row.required_vram_gb,
+            storage_gb_per_node=row.storage_gb_per_node,
+            work_type=row.work_type or "",
+            deployment_date=row.deployment_date or "",
+            duration=row.duration or "",
+            notes=row.notes or "",
+            source_ip=row.source_ip,
+            user_agent=row.user_agent,
+            status=row.status or "new",
+            review_notes=row.review_notes or "",
+            submitted_at=row.submitted_at,
+            reviewed_at=row.reviewed_at,
+        )
+
+    # --- GPU capacity overrides (admin-controlled cluster size) ---------
+
+    def list_gpu_capacity_overrides(self) -> list[GpuCapacityOverride]:
+        with session_scope(self.session_factory) as session:
+            rows = session.scalars(select(GpuCapacityOverrideORM)).all()
+            return [self._to_capacity_override(r) for r in rows]
+
+    def get_gpu_capacity_override(self, gpu_model: str) -> GpuCapacityOverride | None:
+        with session_scope(self.session_factory) as session:
+            row = session.get(GpuCapacityOverrideORM, gpu_model.lower())
+            return self._to_capacity_override(row) if row else None
+
+    def upsert_gpu_capacity_override(
+        self, override: GpuCapacityOverride
+    ) -> GpuCapacityOverride:
+        from greencompute_persistence.orm import utcnow
+
+        key = override.gpu_model.lower()
+        with session_scope(self.session_factory) as session:
+            row = session.get(GpuCapacityOverrideORM, key) or GpuCapacityOverrideORM(
+                gpu_model=key
+            )
+            row.total_gpus = override.total_gpus
+            row.available_gpus = override.available_gpus
+            row.note = override.note
+            row.updated_by = override.updated_by
+            row.updated_at = utcnow()
+            session.add(row)
+        return override
+
+    def delete_gpu_capacity_override(self, gpu_model: str) -> bool:
+        with session_scope(self.session_factory) as session:
+            row = session.get(GpuCapacityOverrideORM, gpu_model.lower())
+            if row is None:
+                return False
+            session.delete(row)
+            return True
+
+    @staticmethod
+    def _to_capacity_override(row: GpuCapacityOverrideORM) -> GpuCapacityOverride:
+        return GpuCapacityOverride(
+            gpu_model=row.gpu_model,
+            total_gpus=row.total_gpus or 0,
+            available_gpus=row.available_gpus or 0,
+            note=row.note or "",
+            updated_by=row.updated_by or "",
+            updated_at=row.updated_at,
+        )
 
     @staticmethod
     def _to_inquiry(row: CommercialInquiryORM) -> CommercialInquiryRecord:

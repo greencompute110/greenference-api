@@ -30,12 +30,15 @@ from greencompute_protocol import (
     BuildLogRecord,
     BuildRecord,
     BuildRequest,
+    BareMetalInquiryCreateRequest,
+    BareMetalInquiryRecord,
     ChatCompletionRequest,
     CommercialInquiryCreateRequest,
     CommercialInquiryRecord,
     DeploymentCreateRequest,
     DeploymentRecord,
     DeploymentUpdateRequest,
+    GpuCapacityOverride,
     InvocationRecord,
     UserRecord,
     UserProfileUpdateRequest,
@@ -563,6 +566,81 @@ class GatewayService:
         if updated is None:
             raise KeyError(f"inquiry not found: {inquiry_id}")
         return updated
+
+    # --- Bare-metal inquiries (dedicated /rental sales form) ---------------
+
+    def submit_bare_metal_inquiry(
+        self,
+        request: BareMetalInquiryCreateRequest,
+        *,
+        source_ip: str | None = None,
+        user_agent: str | None = None,
+    ) -> BareMetalInquiryRecord:
+        """Public — same hardening as the commercial form (honeypot + IP rate
+        limit). Persists, then fires a webhook with a [Bare-metal] prefix."""
+        if request.website:
+            return BareMetalInquiryRecord(email=request.email or "honeypot@spam")
+        if source_ip:
+            recent = self.repository.count_bare_metal_inquiries_from_ip_since(
+                source_ip, since_seconds=3600
+            )
+            if recent >= 5:
+                raise PermissionError("rate limit exceeded for bare-metal inquiries")
+        inquiry = BareMetalInquiryRecord(
+            name=request.name,
+            email=request.email,
+            company=request.company,
+            card_type=request.card_type,
+            node_count=request.node_count,
+            required_vram_gb=request.required_vram_gb,
+            storage_gb_per_node=request.storage_gb_per_node,
+            work_type=request.work_type,
+            deployment_date=request.deployment_date,
+            duration=request.duration,
+            notes=request.notes,
+            source_ip=source_ip,
+            user_agent=user_agent,
+        )
+        saved = self.repository.save_bare_metal_inquiry(inquiry)
+        try:
+            from greencompute_gateway.infrastructure.notifications import (
+                notify_bare_metal_inquiry,
+            )
+
+            notify_bare_metal_inquiry(saved)
+        except Exception:
+            log.exception("bare-metal webhook dispatch failed for %s", saved.inquiry_id)
+        return saved
+
+    def list_bare_metal_inquiries(
+        self, *, status: str | None = None, limit: int = 100, offset: int = 0
+    ) -> list[BareMetalInquiryRecord]:
+        return self.repository.list_bare_metal_inquiries(
+            status=status, limit=limit, offset=offset
+        )
+
+    def update_bare_metal_inquiry_status(
+        self, inquiry_id: str, *, status: str, review_notes: str | None = None
+    ) -> BareMetalInquiryRecord:
+        updated = self.repository.update_bare_metal_inquiry_status(
+            inquiry_id, status=status, review_notes=review_notes
+        )
+        if updated is None:
+            raise KeyError(f"bare-metal inquiry not found: {inquiry_id}")
+        return updated
+
+    # --- GPU capacity overrides (admin-controlled cluster size) ------------
+
+    def list_gpu_capacity_overrides(self) -> list[GpuCapacityOverride]:
+        return self.repository.list_gpu_capacity_overrides()
+
+    def upsert_gpu_capacity_override(
+        self, override: GpuCapacityOverride
+    ) -> GpuCapacityOverride:
+        return self.repository.upsert_gpu_capacity_override(override)
+
+    def delete_gpu_capacity_override(self, gpu_model: str) -> bool:
+        return self.repository.delete_gpu_capacity_override(gpu_model)
 
     def create_secret(self, user_id: str, request: UserSecretCreateRequest) -> UserSecretRecord:
         secret = UserSecretRecord(user_id=user_id, name=request.name, value=request.value)

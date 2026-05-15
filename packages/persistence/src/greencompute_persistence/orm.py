@@ -760,6 +760,49 @@ class ChainWeightCommitORM(Base):
     committed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class BareMetalInquiryORM(Base):
+    """Inbound lead from the dedicated bare-metal node CTA on /rental."""
+
+    __tablename__ = "bare_metal_inquiries"
+
+    inquiry_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    company: Mapped[str] = mapped_column(String(255), default="")
+    card_type: Mapped[str] = mapped_column(String(32), default="")
+    node_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    required_vram_gb: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    storage_gb_per_node: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    work_type: Mapped[str] = mapped_column(String(64), default="")
+    deployment_date: Mapped[str] = mapped_column(String(64), default="")
+    duration: Mapped[str] = mapped_column(String(128), default="")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="new", index=True)
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class GpuCapacityOverrideORM(Base):
+    """Admin-controlled override for the public capacity surface.
+
+    One row per gpu_model. When present, replaces measured counts in the
+    /platform/v1/gpu-pool response. Deleting the row falls back to live
+    measurement.
+    """
+
+    __tablename__ = "gpu_capacity_overrides"
+
+    gpu_model: Mapped[str] = mapped_column(String(64), primary_key=True)
+    total_gpus: Mapped[int] = mapped_column(Integer, default=0)
+    available_gpus: Mapped[int] = mapped_column(Integer, default=0)
+    note: Mapped[str] = mapped_column(String(255), default="")
+    updated_by: Mapped[str] = mapped_column(String(255), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class CommercialInquiryORM(Base):
     """Inbound lead from the public /contact-sales form.
 
