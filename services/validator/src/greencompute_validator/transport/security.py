@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import HTTPException, status
 
 from greencompute_persistence import CredentialStore, get_metrics_store
 from greencompute_protocol import MemoryReplayStore, SignedRequest, verify_payload, verify_payload_hotkey
 from greencompute_control_plane.infrastructure.repository import ControlPlaneRepository
 from greencompute_validator.application.services import service
+
+
+def _env_master_admin_key() -> str:
+    """Master admin key from env. Matches the gateway's break-glass logic so
+    a single env var lets ops authenticate against both surfaces."""
+    return (os.environ.get("GREENCOMPUTE_ADMIN_API_KEY") or "").strip()
 
 
 credential_store = CredentialStore(
@@ -28,6 +36,11 @@ def require_admin_api_key(authorization: str | None, x_api_key: str | None) -> N
     if not secret:
         metrics.increment("auth.failure.missing_admin_key")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing admin api key")
+    # Break-glass: env-var master admin key (matches gateway's path).
+    master = _env_master_admin_key()
+    if master and secret == master:
+        metrics.increment("auth.success.master_admin")
+        return
     api_key = credential_store.get_api_key_by_secret(secret)
     if api_key is None:
         metrics.increment("auth.failure.invalid_admin_key")

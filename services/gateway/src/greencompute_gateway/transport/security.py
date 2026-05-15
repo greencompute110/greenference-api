@@ -1,13 +1,42 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import HTTPException, status
 
 from greencompute_persistence import CredentialStore, FixedWindowRateLimiter, get_metrics_store
+from greencompute_protocol import APIKeyRecord
 
 
 credential_store = CredentialStore()
 rate_limiter = FixedWindowRateLimiter()
 metrics = get_metrics_store("greencompute-gateway")
+
+
+# Synthetic admin record returned when the caller presents the
+# GREENCOMPUTE_ADMIN_API_KEY env-var value. Lets ops recover access without
+# needing a row in api_keys — break-glass mechanism.
+_MASTER_ADMIN_KEY_ID = "env-master"
+
+
+def _env_master_admin_key() -> str:
+    """Read the master admin key on every call so .env changes after restart
+    take effect without re-importing."""
+    return (os.environ.get("GREENCOMPUTE_ADMIN_API_KEY") or "").strip()
+
+
+def _master_admin_record(secret: str) -> APIKeyRecord:
+    from datetime import UTC, datetime
+
+    return APIKeyRecord(
+        key_id=_MASTER_ADMIN_KEY_ID,
+        user_id=None,
+        name="env master admin",
+        admin=True,
+        scopes=[],
+        secret=secret,
+        created_at=datetime.now(UTC),
+    )
 
 
 def extract_api_key_secret(authorization: str | None, x_api_key: str | None) -> str | None:
@@ -32,6 +61,13 @@ def require_api_key(
     if not secret:
         metrics.increment("auth.failure.missing_api_key")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing api key")
+    # Env-var master admin key — break-glass auth that survives DB wipes.
+    # Checked BEFORE the DB lookup so it works even when the api_keys table
+    # is unreachable (e.g. during incident recovery).
+    master = _env_master_admin_key()
+    if master and secret == master:
+        metrics.increment("auth.success.master_admin")
+        return _master_admin_record(secret)
     api_key = credential_store.get_api_key_by_secret(secret)
     if api_key is None:
         metrics.increment("auth.failure.invalid_api_key")
