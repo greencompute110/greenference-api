@@ -158,7 +158,9 @@ services:
       control-plane:
         condition: service_healthy
     command: >
-      sh -lc "pip install -q psycopg[binary] sqlalchemy fastapi uvicorn pydantic python-multipart substrate-interface bittensor &&
+      sh -lc "pip install -q psycopg[binary] sqlalchemy fastapi uvicorn pydantic python-multipart bittensor &&
+      pip uninstall -y -q scalecodec py-scale-codec || true &&
+      pip install -q --force-reinstall --no-deps substrate-interface &&
       uvicorn greencompute_validator.main:app --host 0.0.0.0 --port 8002 --log-level info"
     ports:
       - "28002:8002"
